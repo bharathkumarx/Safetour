@@ -1,0 +1,51 @@
+openapi: 3.0.3
+info:
+  title: SafeTour API
+  version: 1.0.0
+  description: Historical/demo data — not a live crime feed.
+servers:
+  - url: /api/v1
+paths:
+  /health:
+    get:
+      responses:
+        '200': { description: Service health and loaded data version }
+  /meta:
+    get:
+      responses:
+        '200': { description: Dataset metadata and freshness }
+  /data-status:
+    get:
+      responses:
+        '200': { description: Data freshness and provenance }
+  /score:
+    get:
+      parameters:
+        - { in: query, name: lat, required: true, schema: { type: number, minimum: 12.8, maximum: 13.18 } }
+        - { in: query, name: lng, required: true, schema: { type: number, minimum: 77.45, maximum: 77.8 } }
+        - { in: query, name: hour, schema: { type: integer, minimum: 0, maximum: 23 } }
+      responses:
+        '200': { description: Explainable SafeScore }
+        '422': { description: Invalid coordinates or hour }
+        '5XX': { description: Internal server error }
+  /heatmap:
+    get:
+      parameters:
+        - { in: query, name: hour, schema: { type: integer, minimum: 0, maximum: 23 } }
+        - { in: query, name: timeBand, schema: { type: string, enum: [Morning, Afternoon, Evening, Night] } }
+        - { in: query, name: crimeType, schema: { type: string } }
+        - { in: query, name: bbox, schema: { type: string } }
+      responses:
+        '200': { description: GeoJSON risk FeatureCollection }
+        '422': { description: Invalid filter or bounding box }
+  /areas:
+    get:
+      responses:
+        '200': { description: Ranked area scores }
+  /places/search:
+    get:
+      parameters:
+        - { in: query, name: q, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Bangalore-bounded Nominatim results }
+        '422': { description: Missing query }

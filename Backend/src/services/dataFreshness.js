@@ -24,10 +24,11 @@ export async function getDataFreshness() {
     isSynthetic: metadata.isSynthetic,
     incidentCount: metadata.incidentCount,
     dataThrough: metadata.latestIncidentAt,
+    cityMeanRisk: metadata.cityMeanRisk,
+    percentileReferences: metadata.percentileReferences,
   };
 }
 
 export async function getBaselineHash() {
   return baselineHash();
 }
-

@@ -2,7 +2,13 @@ import { CellRisk, Metadata } from '../models/CellRisk.js';
 import { Incident } from '../models/Incident.js';
 import { createSpatialIndex } from '../engine/spatialIndex.js';
 
-let state = { incidents: [], index: createSpatialIndex([]), cellRisks: new Map(), dataVersion: null };
+let state = {
+  incidents: [],
+  index: createSpatialIndex([]),
+  cellRisks: new Map(),
+  metadata: null,
+  dataVersion: null,
+};
 
 export async function reload() {
   const [incidents, risks] = await Promise.all([Incident.find({}).lean(), CellRisk.find({}).lean()]);
@@ -13,11 +19,19 @@ export async function reload() {
     incidents,
     index: nextIndex,
     cellRisks: nextCellRisks,
+    metadata,
     dataVersion: metadata?.dataVersion ?? null,
   };
   return state;
 }
 
 export function getDataStore() {
+  return state;
+}
+
+/** Reload only when the persisted metadata version changed. */
+export async function reloadIfChanged() {
+  const metadata = await Metadata.findOne({}).select('dataVersion').lean();
+  if (metadata?.dataVersion !== state.dataVersion) return reload();
   return state;
 }

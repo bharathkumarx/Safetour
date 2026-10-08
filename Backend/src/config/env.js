@@ -6,6 +6,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
   DATA_VERSION: z.string().default('demo-2026-01'),
+  DATA_POLL_SECONDS: z.coerce.number().int().min(0).default(30),
 });
 
 const parsed = envSchema.safeParse(process.env);
