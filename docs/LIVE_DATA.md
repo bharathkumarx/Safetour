@@ -29,6 +29,26 @@ CellRisk records first with unordered bulk upserts, then advances the metadata
 data version. The process emits cell-change hooks for the future road-edge
 refresher; no HTTP request runs this computation.
 
+The frozen global city crime mean is the `cityMeanRisk` metadata value
+(currently `0.5`, retained under that historical field name). It is the
+baseline shrinkage mean in:
+
+`crime = crimePercentile * confidence + cityMeanCrime * (1 - confidence)`.
+
+The verifier labels this as `frozenCityMeanCrime`. Its former
+`cityMeanCrime` column displayed the shrinkage numerator
+`crime - crimePercentile * confidence`, which is not the mean and varied as
+confidence/percentile changed. Incremental ingestion does not recompute the
+frozen mean; only the full rebuild may replace it.
+
+Direct `scorePoint` calls evaluate the exact requested hour using the circular
+time-weight. Stored CellRisk records are computed per time band at their
+representative hours (8, 14, 18, and 23), so hours 22 and 23 read the same
+stored Night band even though direct score calculations can differ slightly.
+SafeTour scores are therefore computed per time band for persisted risk tables;
+changing direct point scoring to snap hours would be a separate behavior
+change.
+
 ```bash
 npm run ingest -- --file Data/demo_live_incidents.csv --source demo
 npm run demo:verify

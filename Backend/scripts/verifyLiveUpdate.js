@@ -13,6 +13,12 @@ import { execFileSync } from 'node:child_process';
 
 const point = { lat: 12.9352, lng: 77.6245 };
 const h3 = latLngToCell(point.lat, point.lng, 9);
+const timeBandForHour = (hour) => {
+  if (hour >= 5 && hour < 11) return { timeBand: 'Morning', representativeHour: 8 };
+  if (hour >= 11 && hour < 17) return { timeBand: 'Afternoon', representativeHour: 14 };
+  if (hour >= 17 && hour < 20) return { timeBand: 'Evening', representativeHour: 18 };
+  return { timeBand: 'Night', representativeHour: 23 };
+};
 const score = async (hour) => {
   const incidents = await Incident.find({}).lean();
   const metadata = await Metadata.findOne({}).lean();
@@ -22,20 +28,16 @@ const score = async (hour) => {
     cityMeanCrime: metadata.cityMeanRisk,
   });
   const result = engine.scorePoint({ ...point, hour });
-  const band = hour >= 5 && hour < 11
-    ? 'Morning'
-    : hour >= 11 && hour < 17
-      ? 'Afternoon'
-      : hour >= 17 && hour < 20
-        ? 'Evening'
-        : 'Night';
-  const stored = await CellRisk.findOne({ h3, band }).lean();
+  const { timeBand } = timeBandForHour(hour);
+  const stored = await CellRisk.findOne({ h3, band: timeBand }).lean();
   return { result, stored };
 };
 
 execFileSync('node', [path.resolve(process.cwd(), 'scripts/demoReset.js')], { stdio: 'inherit' });
 await mongoose.connect(env.MONGODB_URI);
-const before = { 22: await score(22), 23: await score(23) };
+const hours = [1, 8, 10, 14, 18, 20, 22, 23];
+const before = Object.fromEntries(await Promise.all(hours.map(async (hour) => [hour, await score(hour)])));
+const metadata = await Metadata.findOne({}).lean();
 const rows = csvSource.fetchRows({ filePath: path.resolve(process.cwd(), '../Data/demo_live_incidents.csv') });
 const ingestion = await ingestRows(rows, { source: 'demo', deferMetadata: true });
 const refresh = await refreshAffectedCells(ingestion.insertedIncidents);
@@ -57,10 +59,30 @@ console.table(
     affectedCells: refresh.affectedCells,
     storedScore: `${before[hour].stored?.score ?? 'n/a'} -> ${after[hour].stored?.score ?? 'n/a'}`,
     crimePercentile: `${before[hour].result.breakdown.crimePercentile.toFixed(4)} -> ${after[hour].result.breakdown.crimePercentile.toFixed(4)}`,
-    cityMeanCrime: `${before[hour].result.crime - before[hour].result.breakdown.crimePercentile * before[hour].result.confidence} -> ${
-      after[hour].result.crime - after[hour].result.breakdown.crimePercentile * after[hour].result.confidence
-    }`,
+    frozenCityMeanCrime: `${metadata?.cityMeanRisk ?? 'n/a'}`,
+    shrinkageNumerator: `${(
+      before[hour].result.crime -
+      before[hour].result.breakdown.crimePercentile * before[hour].result.confidence
+    ).toFixed(6)} -> ${(
+      after[hour].result.crime -
+      after[hour].result.breakdown.crimePercentile * after[hour].result.confidence
+    ).toFixed(6)}`,
   })),
+);
+console.table(
+  hours.map((hour) => {
+    const { result } = before[hour];
+    return {
+      hour,
+      ...timeBandForHour(hour),
+      score: result.score,
+      risk: result.risk.toFixed(6),
+      C: result.crime.toFixed(6),
+      E: result.environment.toFixed(6),
+      confidence: result.confidence.toFixed(6),
+      nNearby: result.nNearby,
+    };
+  }),
 );
 if ([22, 23].some((hour) => after[hour].result.score > before[hour].result.score)) {
   console.error('SafeScore increased after demo ingestion; inspect C, E, and shrinkage terms above.');

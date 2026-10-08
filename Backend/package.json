@@ -16,6 +16,7 @@
     "ingest": "node scripts/ingest.js",
     "demo:reset": "node scripts/demoReset.js",
     "demo:verify": "node scripts/verifyLiveUpdate.js",
+    "demo:candidates": "node scripts/demoCandidates.js",
     "backfill:fingerprints": "node scripts/backfillFingerprints.js",
     "build:risk": "node scripts/buildRiskTables.js",
     "build:graph": "node scripts/buildGraph.js"

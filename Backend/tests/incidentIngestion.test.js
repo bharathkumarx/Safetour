@@ -101,6 +101,7 @@ describe('incident ingestion', () => {
     const after = await Metadata.findOne({}).lean();
     const newer = await Incident.findOne({ source: 'demo' }).lean();
     expect(after.recencyReferenceAt).toEqual(before.recencyReferenceAt);
+    expect(after.cityMeanRisk).toBe(before.cityMeanRisk);
     expect(newer.recencyWeight).toBe(1);
   });
 
