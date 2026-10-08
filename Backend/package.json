@@ -46,7 +46,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "eslint": "^9.39.5",
+    "eslint": "^10.12.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import": "^2.32.0",
     "mongodb-memory-server": "^11.3.0",
