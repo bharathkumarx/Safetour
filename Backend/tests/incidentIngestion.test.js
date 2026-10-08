@@ -10,6 +10,12 @@ import { Metadata } from '../src/models/CellRisk.js';
 import { ingestRows } from '../src/services/incidentIngestion.js';
 import { csvSource } from '../src/services/incidentSource.js';
 
+async function collectRows(source) {
+  const rows = [];
+  for await (const value of source) rows.push(value);
+  return rows;
+}
+
 const row = (overrides = {}) => ({
   latitude: '12.9352',
   longitude: '77.6245',
@@ -94,8 +100,8 @@ describe('csv source', () => {
     const tabPath = path.join(directory, 'tab.csv');
     await fs.writeFile(commaPath, `${headers.join(',')}\n${values.join(',')}\n`);
     await fs.writeFile(tabPath, `${headers.join('\t')}\n${values.join('\t')}\n`);
-    expect((await Array.fromAsync(csvSource.fetchRows({ filePath: commaPath })))[0].crime_type).toBe('Robbery');
-    expect((await Array.fromAsync(csvSource.fetchRows({ filePath: tabPath })))[0].crime_type).toBe('Robbery');
+    expect((await collectRows(csvSource.fetchRows({ filePath: commaPath })))[0].crime_type).toBe('Robbery');
+    expect((await collectRows(csvSource.fetchRows({ filePath: tabPath })))[0].crime_type).toBe('Robbery');
   });
 });
 
@@ -104,4 +110,3 @@ it('protects the immutable baseline checksum', async () => {
   const expected = (await fs.readFile(path.resolve(process.cwd(), 'tests/fixtures/baseline.sha256'), 'utf8')).trim();
   expect(crypto.createHash('sha256').update(csv).digest('hex')).toBe(expected);
 });
-
