@@ -4,6 +4,7 @@ import {
   createRiskEngine,
   environmentVulnerability,
   kdeAtPoint,
+  percentileRank,
   scorePoint,
   timeWeight,
 } from '../src/engine/riskEngine.js';
@@ -75,5 +76,25 @@ describe('risk engine', () => {
     const engine = createRiskEngine([point()], { allCellCrime: [0, 1] });
     expect(engine.scorePoint({ lat: 12.9716, lng: 77.5946 })).toHaveProperty('score');
     expect(engine.index).toBeDefined();
+  });
+
+  it('ranks against a frozen percentile reference without rescanning it', () => {
+    const reference = [0, 1, 2, 3];
+    expect(percentileRank(2, reference, { sorted: true })).toBeCloseTo(2 / 3);
+  });
+
+  it('does not increase SafeScore when an equal-environment severe incident is added', () => {
+    const base = point({ severity: 7, lighting: 0.5, cctv: 0.5, crowd: 0.5, police: 0.5 });
+    const options = {
+      lat: 12.9716,
+      lng: 77.5946,
+      allCellCrime: [0, 1],
+      cityMeanCrime: 0.5,
+      cityMeanEnvironment: 0.5,
+    };
+    const before = scorePoint({ ...options, incidents: [base] });
+    const after = scorePoint({ ...options, incidents: [base, point({ severity: 10 })] });
+    expect(after.breakdown.crimePercentile).toBeGreaterThanOrEqual(before.breakdown.crimePercentile);
+    expect(after.score).toBeLessThanOrEqual(before.score);
   });
 });

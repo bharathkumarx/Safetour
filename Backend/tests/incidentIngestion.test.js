@@ -4,11 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import { latLngToCell } from 'h3-js';
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Incident } from '../src/models/Incident.js';
 import { Metadata } from '../src/models/CellRisk.js';
+import { CellRisk } from '../src/models/CellRisk.js';
 import { ingestRows } from '../src/services/incidentIngestion.js';
 import { csvSource } from '../src/services/incidentSource.js';
+import { refreshAffectedCells } from '../src/services/riskRefresh.js';
 
 async function collectRows(source) {
   const rows = [];
@@ -88,6 +91,39 @@ describe('incident ingestion', () => {
     expect(second.dataVersion).toBe(first.dataVersion);
     expect(metadata.incidentCount).toBe(1);
     expect(metadata.latestIncidentAt).toEqual(new Date('2026-10-06T21:00:00.000Z'));
+  });
+
+  it('keeps the baseline recency reference frozen for newer incidents', async () => {
+    const baseline = row({ date: '2024-12-31', time: '23:00', hour: '23' });
+    await ingestRows([baseline], { source: 'baseline' });
+    const before = await Metadata.findOne({}).lean();
+    await ingestRows([row({ date: '2026-10-07', time: '22:00', hour: '22' })], { source: 'demo' });
+    const after = await Metadata.findOne({}).lean();
+    const newer = await Incident.findOne({ source: 'demo' }).lean();
+    expect(after.recencyReferenceAt).toEqual(before.recencyReferenceAt);
+    expect(newer.recencyWeight).toBe(1);
+  });
+
+  it('refreshes only affected cells', async () => {
+    await ingestRows([row({ date: '2024-12-31', time: '23:00', hour: '23' })], { source: 'baseline' });
+    const near = latLngToCell(12.9352, 77.6245, 9);
+    const far = latLngToCell(13.15, 77.75, 9);
+    await Metadata.findOneAndUpdate(
+      {},
+      { $set: { percentileReference: [0, 1], cityMeanRisk: 0.5 } },
+    );
+    await CellRisk.create([
+      { h3: near, band: 'Night', nIncidents: 1, crime: 0.5, env: 0.5, risk: 0.5, score: 50, confidence: 0.1, lat: 12.9352, lng: 77.6245 },
+      { h3: far, band: 'Night', nIncidents: 0, crime: 0.5, env: 0.5, risk: 0.5, score: 50, confidence: 0, lat: 13.15, lng: 77.75 },
+    ]);
+    const incoming = await ingestRows([row({ date: '2026-10-07', time: '22:00', hour: '22' })], {
+      source: 'demo',
+      deferMetadata: true,
+    });
+    const beforeFar = await CellRisk.findOne({ h3: far, band: 'Night' }).lean();
+    await refreshAffectedCells(incoming.insertedIncidents);
+    const afterFar = await CellRisk.findOne({ h3: far, band: 'Night' }).lean();
+    expect(afterFar).toEqual(beforeFar);
   });
 });
 

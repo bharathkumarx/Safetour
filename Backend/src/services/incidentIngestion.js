@@ -71,7 +71,7 @@ function errorIndex(error) {
  * Validate, deduplicate, normalize, and insert incidents from any row source.
  * If is_night is absent, it falls back to the hour-based night calculation.
  */
-export async function ingestRows(rows, { source = 'unknown', dryRun = false } = {}) {
+export async function ingestRows(rows, { source = 'unknown', dryRun = false, deferMetadata = false } = {}) {
   const inputRows = [];
   for await (const row of rows) inputRows.push(row);
   const droppedByReason = {};
@@ -126,7 +126,7 @@ export async function ingestRows(rows, { source = 'unknown', dryRun = false } = 
   const allIncidents = inserted
     ? await Incident.find({}).select('timestamp').lean()
     : null;
-  if (inserted && !dryRun) {
+  if (inserted && !dryRun && !deferMetadata) {
     const timestamps = allIncidents.map((incident) => new Date(incident.timestamp));
     const baselineHash = metadata?.baselineHash ?? (await getBaselineHash());
     const ingestSequence = (metadata?.ingestSequence ?? 0) + 1;
@@ -161,4 +161,29 @@ export async function ingestRows(rows, { source = 'unknown', dryRun = false } = 
       : metadata?.latestIncidentAt,
     dataVersion: inserted ? `${metadata?.baselineHash ?? (await getBaselineHash())}+${(metadata?.ingestSequence ?? 0) + 1}` : metadata?.dataVersion,
   };
+}
+
+export async function updateIngestionMetadata(insertedIncidents = []) {
+  if (!insertedIncidents.length) return Metadata.findOne({}).lean();
+  const metadata = await Metadata.findOne({}).lean();
+  const allIncidents = await Incident.find({}).select('timestamp').lean();
+  const timestamps = allIncidents.map((incident) => new Date(incident.timestamp).getTime());
+  const baselineHash = metadata?.baselineHash ?? (await getBaselineHash());
+  const ingestSequence = (metadata?.ingestSequence ?? 0) + 1;
+  return Metadata.findOneAndUpdate(
+    {},
+    {
+      baselineHash,
+      ingestSequence,
+      dataVersion: `${baselineHash}+${ingestSequence}`,
+      recencyReferenceAt: metadata?.recencyReferenceAt ?? new Date(Math.max(...timestamps)),
+      latestIncidentAt: new Date(Math.max(...timestamps)),
+      lastIngestedAt: new Date(),
+      historicalDataStart: new Date(Math.min(...timestamps)),
+      historicalDataEnd: new Date(Math.max(...timestamps)),
+      isSynthetic: true,
+      incidentCount: allIncidents.length,
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  ).lean();
 }

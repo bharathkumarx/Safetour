@@ -29,6 +29,22 @@ if (!incidents.length) {
 }
 
 const eligible = incidents.filter((incident) => !incident.excluded);
+const previousMetadata = await Metadata.findOne({}).lean();
+const recencyReferenceAt = new Date(Math.max(...incidents.map((incident) => new Date(incident.timestamp).getTime())));
+const recencyUpdates = incidents.map((incident) => ({
+  updateOne: {
+    filter: { _id: incident._id },
+    update: {
+      $set: {
+        recencyWeight: 2 ** (-Math.max(0, (recencyReferenceAt - new Date(incident.timestamp)) / 86400000) / 365),
+      },
+    },
+  },
+}));
+if (recencyUpdates.length) await Incident.bulkWrite(recencyUpdates, { ordered: false });
+for (const incident of incidents) {
+  incident.recencyWeight = 2 ** (-Math.max(0, (recencyReferenceAt - new Date(incident.timestamp)) / 86400000) / 365);
+}
 const index = createSpatialIndex(eligible);
 const cellIds = polygonToCells(bbox, H3_RESOLUTION);
 const cells = cellIds.map((h3) => {
@@ -94,7 +110,21 @@ for (let offset = 0; offset < documents.length; offset += 2000) {
 }
 await Metadata.findOneAndUpdate(
   {},
-  { $set: { baselineHash: dataset.hash, dataVersion: `${dataset.hash}+0` } },
+  {
+    $set: {
+      baselineHash: dataset.hash,
+      dataVersion: `${dataset.hash}+${previousMetadata?.ingestSequence ?? 0}`,
+      ingestSequence: previousMetadata?.ingestSequence ?? 0,
+      recencyReferenceAt,
+      percentileReference: sortedCrimeReferences,
+      cityMeanRisk: cityMeanCrime,
+      latestIncidentAt: recencyReferenceAt,
+      historicalDataStart: new Date(Math.min(...incidents.map((incident) => new Date(incident.timestamp).getTime()))),
+      historicalDataEnd: recencyReferenceAt,
+      isSynthetic: true,
+      incidentCount: incidents.length,
+    },
+  },
   { upsert: true, new: true, setDefaultsOnInsert: true },
 );
 const writeMs = performance.now() - writeStarted;

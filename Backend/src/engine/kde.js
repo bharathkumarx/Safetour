@@ -6,7 +6,7 @@ import { timeWeight } from './timeWeight.js';
 const excluded = (incident, excludedCrimeTypes) =>
   incident.excluded === true || excludedCrimeTypes.includes(incident.crimeType ?? incident.crime_type);
 
-const haversineMeters = (lat1, lng1, lat2, lng2) => {
+export const haversineMeters = (lat1, lng1, lat2, lng2) => {
   const radians = Math.PI / 180;
   const dLat = (lat2 - lat1) * radians;
   const dLng = (lng2 - lng1) * radians;
