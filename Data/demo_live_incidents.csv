@@ -1,0 +1,9 @@
+latitude,longitude,crime_type,crime_severity,date,time,hour,area,lighting_score,cctv_score,crowd_density,police_proximity,is_night
+12.9352,77.6245,Chain Snatching,8.5,2026-10-06,21:00,21,Koramangala,0.25,0.35,0.65,0.30,1
+12.9361,77.6238,Robbery,8.0,2026-10-06,21:30,21,Koramangala,0.30,0.40,0.55,0.35,1
+12.9345,77.6252,Assault,7.5,2026-10-06,22:00,22,Koramangala,0.20,0.30,0.60,0.25,1
+12.9338,77.6239,Chain Snatching,7.0,2026-10-07,22:30,22,Koramangala,0.28,0.38,0.70,0.32,1
+12.9700,77.7500,Robbery,7.5,2026-10-07,21:00,21,Whitefield,0.35,0.45,0.60,0.40,1
+12.9767,77.5727,Assault,7.0,2026-10-07,21:30,21,Majestic,0.30,0.50,0.80,0.45,1
+12.9784,77.6408,Chain Snatching,8.0,2026-10-07,22:00,22,Indiranagar,0.32,0.42,0.75,0.38,1
+12.9349,77.6248,Theft,6.5,2026-10-06,22:30,22,Koramangala,0.40,0.45,0.65,0.35,1

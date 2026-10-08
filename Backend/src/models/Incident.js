@@ -20,10 +20,18 @@ const incidentSchema = new mongoose.Schema(
     h3r9: { type: String, required: true },
     recencyWeight: { type: Number, required: true, min: 0, max: 1 },
     excluded: { type: Boolean, required: true, default: false, index: true },
+    source: { type: String, required: true, default: 'baseline' },
+    sourceRecordId: { type: String },
+    fingerprint: { type: String, required: true },
+    ingestedAt: { type: Date, required: true, default: Date.now },
   },
   { timestamps: true },
 );
 
 incidentSchema.index({ location: '2dsphere' });
+incidentSchema.index(
+  { fingerprint: 1 },
+  { unique: true, partialFilterExpression: { source: { $ne: 'baseline' } } },
+);
 
 export const Incident = mongoose.models.Incident || mongoose.model('Incident', incidentSchema);

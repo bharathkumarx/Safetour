@@ -19,7 +19,18 @@ const cellRiskSchema = new mongoose.Schema(
 cellRiskSchema.index({ band: 1, h3: 1 }, { unique: true });
 
 const metadataSchema = new mongoose.Schema(
-  { key: { type: String, unique: true, required: true }, value: { type: mongoose.Schema.Types.Mixed } },
+  {
+    baselineHash: { type: String, required: true },
+    ingestSequence: { type: Number, required: true, default: 0 },
+    dataVersion: { type: String, required: true },
+    recencyReferenceAt: { type: Date, required: true },
+    latestIncidentAt: { type: Date },
+    lastIngestedAt: { type: Date },
+    historicalDataStart: { type: Date },
+    historicalDataEnd: { type: Date },
+    isSynthetic: { type: Boolean, required: true, default: true },
+    incidentCount: { type: Number, required: true, default: 0 },
+  },
   { timestamps: true },
 );
 

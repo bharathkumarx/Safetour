@@ -13,6 +13,8 @@
     "test": "vitest run",
     "lint": "eslint .",
     "seed": "node scripts/seedIncidents.js",
+    "ingest": "node scripts/ingest.js",
+    "backfill:fingerprints": "node scripts/backfillFingerprints.js",
     "build:risk": "node scripts/buildRiskTables.js",
     "build:graph": "node scripts/buildGraph.js"
   },

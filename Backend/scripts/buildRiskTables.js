@@ -93,9 +93,9 @@ for (let offset = 0; offset < documents.length; offset += 2000) {
   await CellRisk.bulkWrite(operations, { ordered: false });
 }
 await Metadata.findOneAndUpdate(
-  { key: 'dataVersion' },
-  { key: 'dataVersion', value: dataset.hash },
-  { upsert: true, new: true },
+  {},
+  { $set: { baselineHash: dataset.hash, dataVersion: `${dataset.hash}+0` } },
+  { upsert: true, new: true, setDefaultsOnInsert: true },
 );
 const writeMs = performance.now() - writeStarted;
 console.log(

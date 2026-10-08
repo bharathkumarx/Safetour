@@ -32,3 +32,13 @@ Cleaning rules:
   half-life.
 - Cybercrime incidents are retained but marked excluded for heatmap, scoring,
   and routing.
+
+Operational ingestion fields:
+
+- `source` identifies the source (`baseline`, `demo`, or an authorized future source).
+- `sourceRecordId` is the source's stable record identifier when available.
+- `fingerprint` is a SHA-1 deduplication key.
+- `ingestedAt` records when the row entered the operational store.
+
+The demo fixture is synthetic and is not a live crime feed. Daily production
+data requires an official, authorized source.
