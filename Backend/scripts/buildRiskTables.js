@@ -6,11 +6,12 @@ import { BANGALORE_BBOX, H3_RESOLUTION, TIME_BANDS } from '../src/config/constan
 import { CellRisk, Metadata } from '../src/models/CellRisk.js';
 import { Incident } from '../src/models/Incident.js';
 import { createRiskEngine } from '../src/engine/riskEngine.js';
-import { kdeAtPoint, logKde } from '../src/engine/kde.js';
+import { kdeAtPoint, logKde, preparePercentileReference } from '../src/engine/kde.js';
 import { createSpatialIndex } from '../src/engine/spatialIndex.js';
 import { readDataset } from './seedIncidents.js';
 
 const started = performance.now();
+const phaseStarted = { load: started };
 const bbox = [
   [BANGALORE_BBOX.minLat, BANGALORE_BBOX.minLng],
   [BANGALORE_BBOX.maxLat, BANGALORE_BBOX.minLng],
@@ -34,9 +35,11 @@ const cells = cellIds.map((h3) => {
   const [lat, lng] = cellToLatLng(h3);
   return { h3, lat, lng };
 });
+const loadMs = performance.now() - phaseStarted.load;
+const computeStarted = performance.now();
 const crimeReferences = [];
-for (const cell of cells) {
-  for (const band of Object.values(TIME_BANDS)) {
+for (const [bandName, band] of Object.entries(TIME_BANDS)) {
+  for (const cell of cells) {
     crimeReferences.push(logKde(kdeAtPoint({
       lat: cell.lat,
       lng: cell.lng,
@@ -45,18 +48,25 @@ for (const cell of cells) {
       index,
     }).value));
   }
+  console.log(
+    `[compute] phase=reference band=${bandName} cells=${cells.length}/${cells.length} total=${cells.length} elapsed=${Math.round(
+      performance.now() - computeStarted,
+    )}ms`,
+  );
 }
+const sortedCrimeReferences = preparePercentileReference(crimeReferences);
 const cityMeanCrime = 0.5;
 const engine = createRiskEngine(incidents, {
-  allCellCrime: crimeReferences,
+  allCellCrime: sortedCrimeReferences,
+  allCellCrimeSorted: true,
   cityMeanCrime,
   radiusMeters: 900,
 });
 const documents = [];
-let offset = 0;
+const writeStarted = performance.now();
 await CellRisk.deleteMany({});
-for (const cell of cells) {
-  for (const [bandName, band] of Object.entries(TIME_BANDS)) {
+for (const [bandName, band] of Object.entries(TIME_BANDS)) {
+  for (const cell of cells) {
     const result = engine.scorePoint({ lat: cell.lat, lng: cell.lng, hour: band.representativeHour });
     documents.push({
       h3: cell.h3,
@@ -70,18 +80,29 @@ for (const cell of cells) {
       lat: cell.lat,
       lng: cell.lng,
     });
-    if (documents.length - offset >= 1000) {
-      await CellRisk.insertMany(documents.slice(offset));
-      offset = documents.length;
-    }
   }
+  console.log(
+    `[compute] phase=scores band=${bandName} cells=${cells.length}/${cells.length} total=${documents.length} elapsed=${Math.round(
+      performance.now() - computeStarted,
+    )}ms`,
+  );
 }
-if (documents.length) await CellRisk.insertMany(documents.slice(offset));
+const computeMs = performance.now() - computeStarted;
+for (let offset = 0; offset < documents.length; offset += 2000) {
+  const operations = documents.slice(offset, offset + 2000).map((document) => ({ insertOne: { document } }));
+  await CellRisk.bulkWrite(operations, { ordered: false });
+}
 await Metadata.findOneAndUpdate(
   { key: 'dataVersion' },
   { key: 'dataVersion', value: dataset.hash },
   { upsert: true, new: true },
 );
-console.log(`Built ${documents.length} cell risks across ${cells.length} H3 cells in ${Math.round(performance.now() - started)}ms`);
+const writeMs = performance.now() - writeStarted;
+console.log(
+  `Timing: load incidents=${Math.round(loadMs)}ms, compute=${Math.round(computeMs)}ms, write MongoDB=${Math.round(
+    writeMs,
+  )}ms, total=${Math.round(performance.now() - started)}ms`,
+);
+console.log(`Built ${documents.length} cell risks across ${cells.length} H3 cells`);
 console.log(`dataVersion: ${dataset.hash}`);
 await mongoose.disconnect();

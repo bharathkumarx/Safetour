@@ -21,20 +21,32 @@ const mean = (rows, key, fallback = 0.5) => {
   return values.length ? values.reduce((a, b) => a + b, 0) / values.length : fallback;
 };
 
+export function calculateCityAverages(incidents = []) {
+  return {
+    lighting: mean(incidents, 'lighting'),
+    cctv: mean(incidents, 'cctv'),
+    police: mean(incidents, 'police'),
+    crowd: mean(incidents, 'crowd'),
+  };
+}
+
 /** Score a latitude/longitude and return the complete explainable result. */
 export function scorePoint({
   lat,
   lng,
   hour = 12,
   incidents = [],
+  eligibleIncidents,
   index = createSpatialIndex(incidents),
   allCellCrime = [0],
+  allCellCrimeSorted = false,
   cityMeanCrime = 0,
   cityMeanEnvironment,
+  cityAverages,
   isNight = hour >= 20 || hour < 5,
   radiusMeters = 900,
 } = {}) {
-  const eligible = incidents.filter(usable);
+  const eligible = eligibleIncidents ?? incidents.filter(usable);
   const local = nearby(index, lat, lng, radiusMeters).filter(usable);
   const cityEnv = cityMeanEnvironment ?? environmentVulnerability(eligible);
   const kde = kdeAtPoint({ lat, lng, incidents: eligible, index, queryHour: hour });
@@ -42,18 +54,13 @@ export function scorePoint({
   // Offline tables normally provide the distribution. For ad-hoc points,
   // retain a monotonic bounded signal rather than making every point rank 0.
   const crimePercentile = allCellCrime.length > 1
-    ? percentileRank(crimeRaw, allCellCrime)
+    ? percentileRank(crimeRaw, allCellCrime, { sorted: allCellCrimeSorted })
     : 1 - Math.exp(-crimeRaw);
   const n = local.length;
   const confidence = n / (n + BAYESIAN_SHRINKAGE_K);
   const environmentRaw = environmentVulnerability(local, {
     isNight,
-    cityAverages: {
-      lighting: mean(eligible, 'lighting'),
-      cctv: mean(eligible, 'cctv'),
-      police: mean(eligible, 'police'),
-      crowd: mean(eligible, 'crowd'),
-    },
+    cityAverages: cityAverages ?? calculateCityAverages(eligible),
   });
   const environmentBreakdown = {
     lighting: mean(local, 'lighting', mean(eligible, 'lighting')),

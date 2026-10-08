@@ -7,7 +7,7 @@ export * from './scoring.js';
 import { EXCLUDED_CRIME_TYPES } from '../config/constants.js';
 import { createSpatialIndex } from './spatialIndex.js';
 import { environmentVulnerability } from './environment.js';
-import { scorePoint as scorePointAtLocation } from './scoring.js';
+import { calculateCityAverages, scorePoint as scorePointAtLocation } from './scoring.js';
 
 /**
  * Create a reusable risk-engine instance for a set of incidents.
@@ -31,7 +31,9 @@ export function createRiskEngine(incidents = [], options = {}) {
   const defaults = {
     ...options,
     incidents: source,
+    eligibleIncidents: eligible,
     index,
+    cityAverages: options.cityAverages ?? calculateCityAverages(eligible),
     cityMeanEnvironment: options.cityMeanEnvironment ?? environmentVulnerability(eligible),
   };
 

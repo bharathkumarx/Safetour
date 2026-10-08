@@ -48,9 +48,14 @@ export function logKde(value) {
   return Math.log1p(Math.max(0, value));
 }
 
+/** Prepare a percentile reference with one sort for repeated rank lookups. */
+export function preparePercentileReference(values = []) {
+  return values.filter(Number.isFinite).sort((a, b) => a - b);
+}
+
 /** Percentile rank (0..1), using the empirical CDF and midpoint ties. */
-export function percentileRank(value, values = []) {
-  const finite = values.filter(Number.isFinite).sort((a, b) => a - b);
+export function percentileRank(value, values = [], { sorted = false } = {}) {
+  const finite = sorted ? values : preparePercentileReference(values);
   if (!finite.length) return 0;
   if (finite.length === 1) return 0;
   const below = bisectLeft(finite, value);
