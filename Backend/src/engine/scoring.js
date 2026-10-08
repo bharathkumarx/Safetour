@@ -4,6 +4,7 @@ import {
   ENVIRONMENT_RISK_WEIGHT,
   EXCLUDED_CRIME_TYPES,
   SAFETY_LABELS,
+  TIME_BANDS,
 } from '../config/constants.js';
 import { createSpatialIndex, nearby } from './spatialIndex.js';
 import { kdeAtPoint, logKde, percentileRank } from './kde.js';
@@ -11,6 +12,11 @@ import { environmentVulnerability } from './environment.js';
 
 const usable = (i) => i.excluded !== true && !EXCLUDED_CRIME_TYPES.includes(i.crimeType ?? i.crime_type);
 const labelFor = (score) => SAFETY_LABELS.find((x) => score >= x.min && score <= x.max)?.label ?? 'High Caution';
+const timeBandForHour = (hour) => Object.entries(TIME_BANDS).find(([, band]) =>
+  band.start < band.end
+    ? hour >= band.start && hour < band.end
+    : hour >= band.start || hour < band.end,
+)[0];
 /** Combine normalized crime and environment risk components. */
 export const calculateRisk = (crime, environment) =>
   Math.max(0, Math.min(1, CRIME_RISK_WEIGHT * crime + ENVIRONMENT_RISK_WEIGHT * environment));
@@ -51,12 +57,14 @@ export function scorePoint({
   const cityEnv = cityMeanEnvironment ?? environmentVulnerability(eligible);
   const kde = kdeAtPoint({ lat, lng, incidents: eligible, index, queryHour: hour });
   const crimeRaw = logKde(kde.value);
+  const n = local.length;
   // Offline tables normally provide the distribution. For ad-hoc points,
   // retain a monotonic bounded signal rather than making every point rank 0.
-  const crimePercentile = allCellCrime.length > 1
-    ? percentileRank(crimeRaw, allCellCrime, { sorted: allCellCrimeSorted })
-    : 1 - Math.exp(-crimeRaw);
-  const n = local.length;
+  const crimePercentile = n === 0
+    ? 0
+    : allCellCrime.length > 1
+      ? percentileRank(crimeRaw, allCellCrime, { sorted: allCellCrimeSorted })
+      : 1 - Math.exp(-crimeRaw);
   const confidence = n / (n + BAYESIAN_SHRINKAGE_K);
   const environmentRaw = environmentVulnerability(local, {
     isNight,
@@ -72,6 +80,8 @@ export function scorePoint({
   const environment = environmentRaw * confidence + cityEnv * (1 - confidence);
   const risk = calculateRisk(crime, environment);
   const score = calculateSafeScore(risk);
+  const timeBand = timeBandForHour(hour);
+  const representativeHour = TIME_BANDS[timeBand].representativeHour;
   const crimeCounts = local.reduce((counts, incident) => {
     const crimeType = incident.crimeType ?? incident.crime_type;
     counts[crimeType] = (counts[crimeType] || 0) + 1;
@@ -90,6 +100,8 @@ export function scorePoint({
     confidence,
     nIncidents: n,
     nNearby: n,
+    timeBand,
+    representativeHour,
     radiusM: radiusMeters,
     topCrimes,
     breakdown: {

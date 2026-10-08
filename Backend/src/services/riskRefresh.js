@@ -28,7 +28,6 @@ export async function refreshAffectedCells(newIncidents, { cellIds } = {}) {
   const started = performance.now();
   const metadata = await Metadata.findOne({}).lean();
   const incidents = await Incident.find({}).lean();
-  const eligible = incidents.filter((incident) => !incident.excluded);
   const cells = cellIds
     ? cellIds.map((h3) => {
         const [lat, lng] = cellToLatLng(h3);
@@ -36,16 +35,21 @@ export async function refreshAffectedCells(newIncidents, { cellIds } = {}) {
       })
     : affectedCellsFor(newIncidents);
   if (!cells.length) return { affectedCells: 0, refreshedRecords: 0, elapsedMs: Math.round(performance.now() - started) };
-  const engine = createRiskEngine(incidents, {
-    allCellCrime: metadata?.percentileReference ?? [],
-    allCellCrimeSorted: true,
-    cityMeanCrime: metadata?.cityMeanRisk ?? 0.5,
-    radiusMeters: 900,
-  });
+  const enginesByBand = Object.fromEntries(
+    Object.keys(TIME_BANDS).map((band) => [
+      band,
+      createRiskEngine(incidents, {
+        allCellCrime: metadata?.percentileReferences?.[band] ?? metadata?.percentileReference ?? [],
+        allCellCrimeSorted: true,
+        cityMeanCrime: metadata?.cityMeanRisk ?? 0.5,
+        radiusMeters: 900,
+      }),
+    ]),
+  );
   const operations = [];
   for (const cell of cells) {
     for (const [band, config] of Object.entries(TIME_BANDS)) {
-      const result = engine.scorePoint({ lat: cell.lat, lng: cell.lng, hour: config.representativeHour });
+      const result = enginesByBand[band].scorePoint({ lat: cell.lat, lng: cell.lng, hour: config.representativeHour });
       operations.push({
         updateOne: {
           filter: { h3: cell.h3, band },

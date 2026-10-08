@@ -53,35 +53,37 @@ const cells = cellIds.map((h3) => {
 });
 const loadMs = performance.now() - phaseStarted.load;
 const computeStarted = performance.now();
-const crimeReferences = [];
+const crimeReferencesByBand = {};
 for (const [bandName, band] of Object.entries(TIME_BANDS)) {
+  const crimeReferences = [];
   for (const cell of cells) {
-    crimeReferences.push(logKde(kdeAtPoint({
+    const kde = kdeAtPoint({
       lat: cell.lat,
       lng: cell.lng,
       queryHour: band.representativeHour,
       incidents: eligible,
       index,
-    }).value));
+    });
+    if (kde.nIncidents > 0) crimeReferences.push(logKde(kde.value));
   }
+  crimeReferencesByBand[bandName] = preparePercentileReference(crimeReferences);
   console.log(
     `[compute] phase=reference band=${bandName} cells=${cells.length}/${cells.length} total=${cells.length} elapsed=${Math.round(
       performance.now() - computeStarted,
     )}ms`,
   );
 }
-const sortedCrimeReferences = preparePercentileReference(crimeReferences);
 const cityMeanCrime = 0.5;
-const engine = createRiskEngine(incidents, {
-  allCellCrime: sortedCrimeReferences,
-  allCellCrimeSorted: true,
-  cityMeanCrime,
-  radiusMeters: 900,
-});
 const documents = [];
 const writeStarted = performance.now();
 await CellRisk.deleteMany({});
 for (const [bandName, band] of Object.entries(TIME_BANDS)) {
+  const engine = createRiskEngine(incidents, {
+    allCellCrime: crimeReferencesByBand[bandName],
+    allCellCrimeSorted: true,
+    cityMeanCrime,
+    radiusMeters: 900,
+  });
   for (const cell of cells) {
     const result = engine.scorePoint({ lat: cell.lat, lng: cell.lng, hour: band.representativeHour });
     documents.push({
@@ -116,7 +118,8 @@ await Metadata.findOneAndUpdate(
       dataVersion: `${dataset.hash}+${previousMetadata?.ingestSequence ?? 0}`,
       ingestSequence: previousMetadata?.ingestSequence ?? 0,
       recencyReferenceAt,
-      percentileReference: sortedCrimeReferences,
+      percentileReferences: crimeReferencesByBand,
+      percentileReference: crimeReferencesByBand.Night,
       cityMeanRisk: cityMeanCrime,
       latestIncidentAt: recencyReferenceAt,
       historicalDataStart: new Date(Math.min(...incidents.map((incident) => new Date(incident.timestamp).getTime()))),

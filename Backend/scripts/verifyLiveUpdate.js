@@ -11,7 +11,7 @@ import { refreshAffectedCells } from '../src/services/riskRefresh.js';
 import { reload } from '../src/services/dataStore.js';
 import { execFileSync } from 'node:child_process';
 
-const point = { lat: 12.9352, lng: 77.6245 };
+const point = { lat: 12.9582, lng: 77.6959 };
 const h3 = latLngToCell(point.lat, point.lng, 9);
 const timeBandForHour = (hour) => {
   if (hour >= 5 && hour < 11) return { timeBand: 'Morning', representativeHour: 8 };
@@ -23,7 +23,7 @@ const score = async (hour) => {
   const incidents = await Incident.find({}).lean();
   const metadata = await Metadata.findOne({}).lean();
   const engine = createRiskEngine(incidents, {
-    allCellCrime: metadata.percentileReference,
+    allCellCrime: metadata.percentileReferences?.[timeBandForHour(hour).timeBand] ?? metadata.percentileReference,
     allCellCrimeSorted: true,
     cityMeanCrime: metadata.cityMeanRisk,
   });
@@ -46,27 +46,15 @@ const after = { 22: await score(22), 23: await score(23) };
 console.table(
   [22, 23].map((hour) => ({
     hour,
-    before: before[hour].result.score,
-    after: after[hour].result.score,
-    score: `${before[hour].result.score} -> ${after[hour].result.score}`,
-    score10: `${(before[hour].result.score / 10).toFixed(1)} -> ${(after[hour].result.score / 10).toFixed(1)}`,
-    label: `${before[hour].result.label} -> ${after[hour].result.label}`,
-    risk: `${before[hour].result.risk.toFixed(4)} -> ${after[hour].result.risk.toFixed(4)}`,
-    C: `${before[hour].result.crime.toFixed(4)} -> ${after[hour].result.crime.toFixed(4)}`,
-    E: `${before[hour].result.environment.toFixed(4)} -> ${after[hour].result.environment.toFixed(4)}`,
-    confidence: `${before[hour].result.confidence.toFixed(4)} -> ${after[hour].result.confidence.toFixed(4)}`,
-    nNearby: `${before[hour].result.nNearby} -> ${after[hour].result.nNearby}`,
+    baselineScore: before[hour].result.score,
+    baselineLabel: before[hour].result.label,
+    baselineConfidence: before[hour].result.confidence.toFixed(4),
+    baselineNNearby: before[hour].result.nNearby,
+    afterScore: after[hour].result.score,
+    afterLabel: after[hour].result.label,
+    afterConfidence: after[hour].result.confidence.toFixed(4),
+    afterNNearby: after[hour].result.nNearby,
     affectedCells: refresh.affectedCells,
-    storedScore: `${before[hour].stored?.score ?? 'n/a'} -> ${after[hour].stored?.score ?? 'n/a'}`,
-    crimePercentile: `${before[hour].result.breakdown.crimePercentile.toFixed(4)} -> ${after[hour].result.breakdown.crimePercentile.toFixed(4)}`,
-    frozenCityMeanCrime: `${metadata?.cityMeanRisk ?? 'n/a'}`,
-    shrinkageNumerator: `${(
-      before[hour].result.crime -
-      before[hour].result.breakdown.crimePercentile * before[hour].result.confidence
-    ).toFixed(6)} -> ${(
-      after[hour].result.crime -
-      after[hour].result.breakdown.crimePercentile * after[hour].result.confidence
-    ).toFixed(6)}`,
   })),
 );
 console.table(

@@ -29,7 +29,7 @@ await mongoose.connect(env.MONGODB_URI);
 const incidents = await Incident.find({}).lean();
 const metadata = await Metadata.findOne({}).lean();
 const engine = createRiskEngine(incidents, {
-  allCellCrime: metadata.percentileReference,
+  allCellCrime: metadata.percentileReferences?.Night ?? metadata.percentileReference,
   allCellCrimeSorted: true,
   cityMeanCrime: metadata.cityMeanRisk,
 });
@@ -48,4 +48,17 @@ console.table(
     };
   }),
 );
+const labels = (score) =>
+  score >= 80 ? 'Very Safe' : score >= 65 ? 'Safe' : score >= 50 ? 'Moderate' : score >= 35 ? 'Caution' : 'High Caution';
+for (const band of ['Morning', 'Afternoon', 'Evening', 'Night']) {
+  const rows = await (await import('../src/models/CellRisk.js')).CellRisk.find({ band }).select({ score: 1, nIncidents: 1, _id: 0 }).lean();
+  const covered = rows.filter((row) => row.nIncidents > 0);
+  console.log(
+    `${band} covered histogram:`,
+    Object.fromEntries(['Very Safe', 'Safe', 'Moderate', 'Caution', 'High Caution'].map((label) => [
+      label,
+      covered.filter((row) => labels(row.score) === label).length,
+    ])),
+  );
+}
 await mongoose.disconnect();

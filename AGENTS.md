@@ -48,7 +48,7 @@ time (HH:MM), hour (0-23), area, lighting_score, cctv_score, crowd_density, poli
 - H3 resolution 9 cells (h3-js v4: latLngToCell, cellToLatLng, polygonToCells, cellToBoundary, gridDisk)
 - time weight: circular Gaussian, sigma_t = 2.5 h; recency half-life 365 days
 - crime risk C: severity-weighted Gaussian KDE (sigma_s = 300 m; neighbours within 3*sigma via kdbush/geokdbush),
-  then log(1+x), then percentile rank against the FROZEN reference distribution (see Live data rules), giving 0-1
+  then log(1+x), then percentile rank against COVERED cells in the FROZEN reference distribution (see Live data rules), giving 0-1
 - environment vulnerability E = 1 - (0.30 lighting + 0.25 cctv + 0.25 police + 0.20 crowd_effect);
   night: lighting weight x1.4, crowd counts as protective; day: lighting weight x0.6; renormalise weights.
   For Pickpocketing/Chain Snatching dominated areas, very high crowd is NOT protective.
@@ -81,5 +81,5 @@ time (HH:MM), hour (0-23), area, lighting_score, cctv_score, crowd_density, poli
   for all 4 representative hours. Never full-city work inside an HTTP request.
 - The running API picks up ingested data by polling metadata.dataVersion (default every 30 s) and calling dataStore.reload().
 - SafeScore 0-100 is canonical; score10 = score/10 is presentation only.
+- Persisted scores are computed per time band using representative hours (8, 14, 18, 23); scorePoint returns the selected timeBand and representativeHour while retaining exact-hour time weighting.
 - Every score, heatmap and route response includes data freshness (dataThrough, isSynthetic, dataVersion).
-

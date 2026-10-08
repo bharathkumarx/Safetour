@@ -24,6 +24,7 @@ const metadataSchema = new mongoose.Schema(
     ingestSequence: { type: Number, required: true, default: 0 },
     dataVersion: { type: String, required: true },
     percentileReference: { type: [Number], default: [] },
+    percentileReferences: { type: mongoose.Schema.Types.Mixed, default: {} },
     cityMeanRisk: { type: Number, default: 0.5 },
     recencyReferenceAt: { type: Date, required: true },
     latestIncidentAt: { type: Date },

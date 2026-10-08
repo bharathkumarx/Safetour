@@ -60,7 +60,7 @@ export function percentileRank(value, values = [], { sorted = false } = {}) {
   if (finite.length === 1) return 0;
   const below = bisectLeft(finite, value);
   const equal = bisectRight(finite, value) - below;
-  return (below + (equal - 1) / 2) / (finite.length - 1);
+  return Math.min(1, Math.max(0, (below + (equal - 1) / 2) / (finite.length - 1)));
 }
 
 export const calculatePercentileRank = percentileRank;
