@@ -6,9 +6,6 @@ MVP features:
 2. SafeScore 0-100 for any place/point with explainable breakdown
 3. Safest route A->B compared with fastest route (safety-vs-speed slider)
 
-NOTE: docs/SAFETOUR_PLAN.md mentions Python/FastAPI in places. IGNORE that. The stack below wins.
-Only the ALGORITHMS in docs/SAFETOUR_PLAN.md section 5 apply, with the dataset-specific adjustments in this file.
-
 ## Stack (MERN, JavaScript only, ES modules: "type": "module")
 - Backend/: Node 20 + Express, Mongoose (MongoDB Atlas), Zod, h3-js, kdbush + geokdbush, @turf/turf, d3-array,
   csv-parse, ngraph.graph + ngraph.path, helmet, cors, compression, express-rate-limit, pino + pino-http,
@@ -16,8 +13,8 @@ Only the ALGORITHMS in docs/SAFETOUR_PLAN.md section 5 apply, with the dataset-s
 - Backend tests: Vitest + Supertest + mongodb-memory-server. Lint: ESLint + Prettier.
 - Frontend/: React 18 + Vite (JavaScript/JSX), Tailwind, shadcn/ui (JS mode), react-map-gl + maplibre-gl,
   @tanstack/react-query, zustand, framer-motion, lucide-react. Tests: Vitest + Testing Library; e2e: Playwright.
-- Data/: bangalore_crime_dataset.csv (provided by the user, do not regenerate or modify it)
-- docs/: SAFETOUR_PLAN.md, API.md, openapi.yaml
+- Data/: bangalore_crime_dataset.csv (immutable baseline, never modify), demo_live_incidents.csv (synthetic demo fixture, created in Prompt 03A)
+- docs/: API.md, openapi.yaml, LIVE_DATA.md
 
 ## Backend layout
 Backend/src/
@@ -39,7 +36,10 @@ time (HH:MM), hour (0-23), area, lighting_score, cctv_score, crowd_density, poli
 - ALL spatial work uses latitude/longitude ONLY. The `area` column is a display label and may not match coordinates.
 - Use the file's is_night column for night/day weighting. Time bands: Morning 05-11, Afternoon 11-17, Evening 17-20,
   Night 20-05. Representative query hours per band: 8, 14, 18, 23.
-- Recency weight is measured from the NEWEST date in the dataset (not today's date).
+- Recency weight = 2^(-ageDays/365). Age is measured from a FROZEN `recencyReferenceAt` stored in the metadata collection
+  (initially the newest date in the baseline CSV). Incidents newer than the reference get ageDays = 0 (weight 1, never above 1).
+  The reference moves forward ONLY during the full rebuild (`npm run build:risk`), which recomputes every cell consistently.
+  Never use the server's current date.
 - lighting/cctv/crowd/police values belong to each incident row. For a location, average them over nearby incidents.
   If there are too few nearby incidents, shrink toward the city average and lower the confidence.
 - The UI must always show a "Demo data" badge and a short disclaimer.
@@ -48,15 +48,15 @@ time (HH:MM), hour (0-23), area, lighting_score, cctv_score, crowd_density, poli
 - H3 resolution 9 cells (h3-js v4: latLngToCell, cellToLatLng, polygonToCells, cellToBoundary, gridDisk)
 - time weight: circular Gaussian, sigma_t = 2.5 h; recency half-life 365 days
 - crime risk C: severity-weighted Gaussian KDE (sigma_s = 300 m; neighbours within 3*sigma via kdbush/geokdbush),
-  then log(1+x), then percentile rank against all cells, giving 0-1
+  then log(1+x), then percentile rank against the FROZEN reference distribution (see Live data rules), giving 0-1
 - environment vulnerability E = 1 - (0.30 lighting + 0.25 cctv + 0.25 police + 0.20 crowd_effect);
   night: lighting weight x1.4, crowd counts as protective; day: lighting weight x0.6; renormalise weights.
   For Pickpocketing/Chain Snatching dominated areas, very high crowd is NOT protective.
-- Risk = 0.6*C + 0.4*E ; SafeScore = round(100*(1-Risk)); Bayesian shrinkage k=5 toward the city mean; confidence = n/(n+k)
+- Risk = `0.6*C + 0.4*E` ; SafeScore = `round(100*(1-Risk))`; Bayesian shrinkage k=5 toward the city mean; confidence = `n/(n+k)`
 - Labels: 80-100 Very Safe, 65-79 Safe, 50-64 Moderate, 35-49 Caution, 0-34 High Caution
-- Routing: custom graph from OpenStreetMap, edge cost = length*(1+lambda*risk*4), A*, max detour 1.5x fastest.
+- Routing: custom graph from OpenStreetMap, edge cost = `length*(1+lambda*risk*4)`, A*, max detour 1.5x fastest.
 - Heavy computation (KDE for all cells, edge risk) runs in offline scripts, NEVER in a request handler.
-  Load cell risk and the graph into memory once at server startup.
+  Load cell risk and the graph into memory at server startup, and reload them only when metadata.dataVersion changes.
 
 ## Rules
 - JavaScript only (no TypeScript). JSDoc on exported functions. Small pure functions.
@@ -68,3 +68,18 @@ time (HH:MM), hour (0-23), area, lighting_score, cctv_score, crowd_density, poli
 - UI style: dark glassmorphism; palette #22C55E #FACC15 #F97316 #EF4444; bg #0B1020; panels rgba(20,27,45,0.72) + backdrop-blur;
   Inter font; Lucide icons; mobile-first bottom sheet; accessible (keyboard, aria, colourblind-safe option).
 - Conventional Commits. Before coding any task: list the plan and files you will touch. After: run tests/lint and report.
+
+## Live data rules
+- Data/bangalore_crime_dataset.csv is the immutable baseline. MongoDB `incidents` is the operational store.
+  Each incident has source: 'baseline' | 'demo' | <future source name>.
+- No real-time source is assumed. Only a synthetic demo fixture exists. Never claim real-time or police data.
+  UI wording: "Historical/demo data — not a live crime feed" unless /data-status says an authorized source is active.
+- NO public or unauthenticated endpoint may create incidents. Ingestion runs only through the CLI / a trusted job.
+- The percentile reference (sorted raw KDE values per band) and the city mean risk are FROZEN at the last full rebuild
+  (`npm run build:risk`). Incremental refresh ranks new raw values against that frozen reference.
+- Incremental refresh recomputes only cells within 3*sigma_s (900 m) of a new incident (gridDisk, then haversine filter),
+  for all 4 representative hours. Never full-city work inside an HTTP request.
+- The running API picks up ingested data by polling metadata.dataVersion (default every 30 s) and calling dataStore.reload().
+- SafeScore 0-100 is canonical; score10 = score/10 is presentation only.
+- Every score, heatmap and route response includes data freshness (dataThrough, isSynthetic, dataVersion).
+
