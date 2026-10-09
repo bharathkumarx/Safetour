@@ -5,6 +5,7 @@ export const validate = (schema, source = 'query') => (req, res, next) => {
       error: { code: 'VALIDATION_ERROR', message: 'Invalid request parameters', details: result.error.issues },
     });
   }
-  req[source] = result.data;
+  res.locals.validated = res.locals.validated ?? {};
+  res.locals.validated[source] = result.data;
   return next();
 };

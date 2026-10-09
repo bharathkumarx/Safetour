@@ -92,8 +92,9 @@ apiRouter.get('/data-status', async (req, res, next) => {
 const scoreHandler = (req, res, next) => {
   try {
     const store = getDataStore();
-    const band = bandForHour(req.query.hour);
-    const result = engineFor(store, band).scorePoint(req.query);
+    const query = res.locals.validated?.query ?? {};
+    const band = bandForHour(query.hour);
+    const result = engineFor(store, band).scorePoint(query);
     res.json({
       ...result,
       score10: result.score / 10,
@@ -118,21 +119,22 @@ const heatmapSchema = z.object({
 apiRouter.get('/heatmap', validate(heatmapSchema), (req, res, next) => {
   try {
     const store = getDataStore();
-    const band = req.query.timeBand ?? bandForHour(req.query.hour ?? TIME_BANDS.Morning.representativeHour);
-    const bbox = parseBbox(req.query.bbox);
-    const types = req.query.crimeType ? (Array.isArray(req.query.crimeType) ? req.query.crimeType : [req.query.crimeType]) : null;
+    const query = res.locals.validated?.query ?? {};
+    const band = query.timeBand ?? bandForHour(query.hour ?? TIME_BANDS.Morning.representativeHour);
+    const bbox = parseBbox(query.bbox);
+    const types = query.crimeType ? (Array.isArray(query.crimeType) ? query.crimeType : [query.crimeType]) : null;
     const filtered = store.incidents.filter((incident) => {
       if (incident.excluded || EXCLUDED_CRIME_TYPES.includes(incident.crimeType)) return false;
       if (types && !types.includes(incident.crimeType)) return false;
-      if (req.query.from && incident.timestamp < req.query.from) return false;
-      if (req.query.to && incident.timestamp > req.query.to) return false;
+      if (query.from && incident.timestamp < query.from) return false;
+      if (query.to && incident.timestamp > query.to) return false;
       const [lng, lat] = incident.location.coordinates;
       return !bbox || (lat >= bbox.minLat && lat <= bbox.maxLat && lng >= bbox.minLng && lng <= bbox.maxLng);
     });
     let cells;
-    if (!types && !req.query.from && !req.query.to && !bbox) {
+    if (!types && !query.from && !query.to && !bbox) {
       cells = [...store.cellRisks.values()].filter((cell) => cell.band === band).slice(0, 5000)
-        .map((cell) => feature({ h3: cell.h3, lat: cell.lat, lng: cell.lng, score: cell.score, n: cell.nIncidents, weight: req.query.layer === 'density' ? Math.min(1, cell.nIncidents / 20) : cell.score / 100 }));
+        .map((cell) => feature({ h3: cell.h3, lat: cell.lat, lng: cell.lng, score: cell.score, n: cell.nIncidents, weight: query.layer === 'density' ? Math.min(1, cell.nIncidents / 20) : cell.score / 100 }));
     } else {
       const grouped = new Map();
       for (const incident of filtered) {
@@ -145,7 +147,7 @@ apiRouter.get('/heatmap', validate(heatmapSchema), (req, res, next) => {
       cells = [...grouped.values()].slice(0, 5000).map((cell) => {
         const [lat, lng] = cellToLatLng(cell.h3);
         const result = engine.scorePoint({ lat, lng, hour: TIME_BANDS[band].representativeHour });
-        return feature({ ...cell, lat, lng, score: result.score, n: cell.n, weight: req.query.layer === 'density' ? Math.min(1, cell.n / 20) : result.score / 100 });
+        return feature({ ...cell, lat, lng, score: result.score, n: cell.n, weight: query.layer === 'density' ? Math.min(1, cell.n / 20) : result.score / 100 });
       });
     }
     res.json({ type: 'FeatureCollection', timeBand: band, features: cells, dataFreshness: freshness(store.metadata) });
@@ -155,7 +157,8 @@ apiRouter.get('/heatmap', validate(heatmapSchema), (req, res, next) => {
 apiRouter.get('/areas', validate(z.object({ hour: hour.default(12) })), (req, res, next) => {
   try {
     const store = getDataStore();
-    const band = bandForHour(req.query.hour);
+    const query = res.locals.validated?.query ?? {};
+    const band = bandForHour(query.hour);
     const grouped = new Map();
     for (const incident of store.incidents.filter((item) => !item.excluded)) {
       if (!grouped.has(incident.area)) grouped.set(incident.area, []);
@@ -164,7 +167,7 @@ apiRouter.get('/areas', validate(z.object({ hour: hour.default(12) })), (req, re
     const rows = [...grouped.entries()].filter(([area]) => !EXCLUDED_AREAS_FROM_RANKING.includes(area)).map(([area, incidents]) => {
       const lat = incidents.reduce((sum, incident) => sum + incident.location.coordinates[1], 0) / incidents.length;
       const lng = incidents.reduce((sum, incident) => sum + incident.location.coordinates[0], 0) / incidents.length;
-      const result = engineFor(store, band).scorePoint({ lat, lng, hour: req.query.hour });
+      const result = engineFor(store, band).scorePoint({ lat, lng, hour: query.hour });
       return { area, score: result.score, label: result.label, confidence: result.confidence };
     }).sort((a, b) => b.score - a.score).map((row, index) => ({ ...row, rank: index + 1 }));
     res.json({ areas: rows, dataFreshness: freshness(store.metadata) });
