@@ -1,13 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import Map, { AttributionControl, NavigationControl } from 'react-map-gl/maplibre';
 import * as maplibregl from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { BANGALORE_BOUNDS } from '../store/mapStore.js';
 
-const DEFAULT_CENTER = { longitude: 77.5946, latitude: 12.9716 };
-const DEFAULT_ZOOM = 11;
-const FALLBACK_STYLE = 'https://tiles.openfreemap.org/styles/dark';
+export const DEFAULT_CENTER = { longitude: 77.5946, latitude: 12.9716 };
+export const DEFAULT_ZOOM = 11.2;
+export const FALLBACK_STYLE = 'https://tiles.openfreemap.org/styles/dark';
+export const MIN_ZOOM = 8.0;
+export const MAX_ZOOM = 18;
+export const BANGALORE_MAX_BOUNDS = [
+  [BANGALORE_BOUNDS.minLng - 0.5, BANGALORE_BOUNDS.minLat - 0.5],
+  [BANGALORE_BOUNDS.maxLng + 0.5, BANGALORE_BOUNDS.maxLat + 0.5],
+];
 const CAMERA_EPSILON = 0.000001;
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl);
@@ -20,23 +26,15 @@ function samePadding(left, right) {
 }
 
 export function updateCameraState(previous, eventViewState) {
-  const next = clampToBangalore({
-    latitude: eventViewState.latitude,
-    longitude: eventViewState.longitude,
-  });
-  const nextViewState = {
-    ...eventViewState,
-    latitude: next.latitude,
-    longitude: next.longitude,
-  };
+  if (!eventViewState) return previous;
   const unchanged =
-    Math.abs(previous.latitude - nextViewState.latitude) < CAMERA_EPSILON &&
-    Math.abs(previous.longitude - nextViewState.longitude) < CAMERA_EPSILON &&
-    Math.abs(previous.zoom - nextViewState.zoom) < CAMERA_EPSILON &&
-    previous.bearing === nextViewState.bearing &&
-    previous.pitch === nextViewState.pitch &&
-    samePadding(previous.padding, nextViewState.padding);
-  return unchanged ? previous : nextViewState;
+    Math.abs(previous.latitude - eventViewState.latitude) < CAMERA_EPSILON &&
+    Math.abs(previous.longitude - eventViewState.longitude) < CAMERA_EPSILON &&
+    Math.abs(previous.zoom - eventViewState.zoom) < CAMERA_EPSILON &&
+    previous.bearing === eventViewState.bearing &&
+    previous.pitch === eventViewState.pitch &&
+    samePadding(previous.padding, eventViewState.padding);
+  return unchanged ? previous : eventViewState;
 }
 
 export function clampToBangalore(position) {
@@ -64,13 +62,6 @@ export default function SafeTourMap({ children, selectedPoint, onMapReady }) {
   const [styleError, setStyleError] = useState(null);
   const styleUrl = import.meta.env.VITE_MAP_STYLE_URL || FALLBACK_STYLE;
 
-  useEffect(() => {
-    const map = mapRef.current?.getMap?.();
-    if (map && typeof onMapReady === 'function') {
-      onMapReady(map);
-    }
-  }, [onMapReady]);
-
   const handleMove = useCallback((event) => {
     setViewState((previous) => updateCameraState(previous, event.viewState));
   }, []);
@@ -97,8 +88,14 @@ export default function SafeTourMap({ children, selectedPoint, onMapReady }) {
         viewState={viewState}
         onMove={handleMove}
         mapStyle={styleUrl}
+        minZoom={MIN_ZOOM}
+        maxZoom={MAX_ZOOM}
+        maxBounds={BANGALORE_MAX_BOUNDS}
         style={{ width: '100%', height: '100%' }}
         attributionControl={false}
+        onLoad={(event) => {
+          onMapReady?.(event.target);
+        }}
         onError={(event) => {
           const message = event.error?.message || 'Map loading failed.';
           console.error('MapLibre failed to load', event);
