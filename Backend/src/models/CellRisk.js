@@ -33,6 +33,7 @@ const metadataSchema = new mongoose.Schema(
     historicalDataEnd: { type: Date },
     isSynthetic: { type: Boolean, required: true, default: true },
     incidentCount: { type: Number, required: true, default: 0 },
+    graphVersion: { type: String, default: null },
   },
   { timestamps: true },
 );

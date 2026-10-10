@@ -93,6 +93,6 @@ export async function refreshAffectedCells(newIncidents, { cellIds } = {}) {
       { upsert: true, new: true },
     );
   }
-  await runCellChangeHooks(cells.map((cell) => cell.h3));
-  return { affectedCells: cells.length, refreshedRecords: operations.length, elapsedMs: Math.round(performance.now() - started) };
+  const hookResults = await runCellChangeHooks(cells.map((cell) => cell.h3));
+  return { affectedCells: cells.length, refreshedRecords: operations.length, hookResults, elapsedMs: Math.round(performance.now() - started) };
 }

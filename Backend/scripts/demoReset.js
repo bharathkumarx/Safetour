@@ -3,12 +3,22 @@ import { env } from '../src/config/env.js';
 import { Incident } from '../src/models/Incident.js';
 import { Metadata } from '../src/models/CellRisk.js';
 import { affectedCellsFor, refreshAffectedCells } from '../src/services/riskRefresh.js';
+import { onCellsChanged } from '../src/services/riskEvents.js';
+import { registerEdgeRiskRefresh } from '../src/services/edgeRiskRefresh.js';
+import { loadRoutingGraph } from '../src/routing/graph.js';
 
 await mongoose.connect(env.MONGODB_URI);
+onCellsChanged(registerEdgeRiskRefresh());
+try {
+  await loadRoutingGraph({ mode: 'drive' });
+} catch (error) {
+  if (error.code === 'ENOENT') console.log('graph unavailable, edge refresh skipped');
+  else throw error;
+}
 const demoIncidents = await Incident.find({ source: 'demo' }).lean();
 const cellIds = affectedCellsFor(demoIncidents).map((cell) => cell.h3);
 await Incident.deleteMany({ source: 'demo' });
-if (cellIds.length) await refreshAffectedCells([], { cellIds });
+const refresh = cellIds.length ? await refreshAffectedCells([], { cellIds }) : { affectedCells: 0, refreshedRecords: 0, hookResults: [] };
 
 const remaining = await Incident.find({}).select('timestamp').lean();
 const metadata = await Metadata.findOne({}).lean();
@@ -73,4 +83,10 @@ if (metadata && timestamps.length) {
 }
 console.log(`Removed demo incidents: ${demoIncidents.length}`);
 console.log(`Refreshed affected H3 cells: ${cellIds.length}`);
+const edgeResult = refresh.hookResults?.find((result) => result?.totalEdges !== undefined);
+if (edgeResult) {
+  console.log(`affected edges: ${edgeResult.refreshed} of ${edgeResult.totalEdges} (${((edgeResult.refreshed / edgeResult.totalEdges) * 100).toFixed(2)}%)`);
+  console.log(`edge risk file updated: ${edgeResult.edgeRiskFileUpdated ? 'yes' : 'no'}`);
+  console.log(`graphVersion: ${edgeResult.graphVersion}`);
+}
 await mongoose.disconnect();

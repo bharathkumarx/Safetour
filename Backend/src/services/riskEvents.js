@@ -8,7 +8,7 @@ export function onCellsChanged(callback) {
 export async function runCellChangeHooks(cellIds) {
   if (!listeners.size) {
     console.log('no listeners');
-    return;
+    return [];
   }
-  await Promise.all([...listeners].map((callback) => callback(cellIds)));
+  return Promise.all([...listeners].map((callback) => callback(cellIds)));
 }

@@ -10,6 +10,9 @@ import { ingestRows } from '../src/services/incidentIngestion.js';
 import { refreshAffectedCells } from '../src/services/riskRefresh.js';
 import { reload } from '../src/services/dataStore.js';
 import { execFileSync } from 'node:child_process';
+import { onCellsChanged } from '../src/services/riskEvents.js';
+import { registerEdgeRiskRefresh } from '../src/services/edgeRiskRefresh.js';
+import { loadRoutingGraph } from '../src/routing/graph.js';
 
 const point = { lat: 12.9582, lng: 77.6959 };
 const h3 = latLngToCell(point.lat, point.lng, 9);
@@ -35,6 +38,13 @@ const score = async (hour) => {
 
 execFileSync('node', [path.resolve(process.cwd(), 'scripts/demoReset.js')], { stdio: 'inherit' });
 await mongoose.connect(env.MONGODB_URI);
+onCellsChanged(registerEdgeRiskRefresh());
+try {
+  await loadRoutingGraph({ mode: 'drive' });
+} catch (error) {
+  if (error.code === 'ENOENT') console.log('graph unavailable, edge refresh skipped');
+  else throw error;
+}
 const hours = [1, 8, 10, 14, 18, 20, 22, 23];
 const before = Object.fromEntries(await Promise.all(hours.map(async (hour) => [hour, await score(hour)])));
 const metadata = await Metadata.findOne({}).lean();
