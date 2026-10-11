@@ -4,7 +4,6 @@ import { CellRisk, Metadata } from '../models/CellRisk.js';
 import { Incident } from '../models/Incident.js';
 import { createRiskEngine } from '../engine/riskEngine.js';
 import { haversineMeters } from '../engine/kde.js';
-import { createSpatialIndex } from '../engine/spatialIndex.js';
 import { runCellChangeHooks } from './riskEvents.js';
 
 const distance = (a, b) => haversineMeters(a[0], a[1], b[0], b[1]);

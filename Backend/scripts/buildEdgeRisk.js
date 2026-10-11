@@ -20,7 +20,7 @@ import { env } from '../src/config/env.js';
 import { Metadata } from '../src/models/CellRisk.js';
 import { decodeBGraph } from '../src/routing/graphBinary.js';
 import {
-  decodeCellRiskMap, computeEdgeRiskBytes, cityMeanByte,
+  decodeCellRiskMap, computeEdgeRiskBytes,
   CITY_MEAN_FALLBACK_RISK, edgesFromBgraph,
 } from '../src/routing/edgeRisk.js';
 import { encodeBRiskFromBytes, makeGraphVersion, parseGraphVersion } from '../src/routing/graphBinary.js';
@@ -42,7 +42,6 @@ async function main() {
   const metadata = await Metadata.findOne({}).lean();
   const cityMeanRisk = metadata?.cityMeanRisk ?? CITY_MEAN_FALLBACK_RISK;
   const dataVersion = metadata?.dataVersion || '';
-  const meanByte = cityMeanByte(cityMeanRisk);
   const nextGraphVersions = [];
 
   for (const mode of MODES) {

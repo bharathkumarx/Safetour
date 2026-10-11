@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { Metadata, CellRisk } from '../models/CellRisk.js';
 import { getDataStore } from './dataStore.js';
 import { edgesForCells, getGraph, sampleCells } from '../routing/graph.js';
-import { decodeBRisk, encodeBRiskFromBytes, parseGraphVersion } from '../routing/graphBinary.js';
+import { decodeBRisk, encodeBRiskFromBytes } from '../routing/graphBinary.js';
 import { decodeCellRiskMap, patchRiskBytes, cityMeanByte, CITY_MEAN_FALLBACK_RISK } from '../routing/edgeRisk.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');

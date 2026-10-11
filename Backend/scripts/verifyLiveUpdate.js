@@ -1,6 +1,6 @@
 import path from 'node:path';
 import mongoose from 'mongoose';
-import { cellToLatLng, latLngToCell } from 'h3-js';
+import { latLngToCell } from 'h3-js';
 import { env } from '../src/config/env.js';
 import { Incident } from '../src/models/Incident.js';
 import { CellRisk, Metadata } from '../src/models/CellRisk.js';
@@ -47,7 +47,6 @@ try {
 }
 const hours = [1, 8, 10, 14, 18, 20, 22, 23];
 const before = Object.fromEntries(await Promise.all(hours.map(async (hour) => [hour, await score(hour)])));
-const metadata = await Metadata.findOne({}).lean();
 const rows = csvSource.fetchRows({ filePath: path.resolve(process.cwd(), '../Data/demo_live_incidents.csv') });
 const ingestion = await ingestRows(rows, { source: 'demo', deferMetadata: true });
 const refresh = await refreshAffectedCells(ingestion.insertedIncidents);

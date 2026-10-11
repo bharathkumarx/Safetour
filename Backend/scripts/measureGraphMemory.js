@@ -31,13 +31,13 @@ async function measure(mode = 'drive') {
   const riskPath = path.join(processedDir, `blr_${mode}.brisk`);
 
   const t0 = performance.now();
-  const rawGraph = await fs.readFile(graphPath);
+  await fs.readFile(graphPath);
   const tReadGraph = performance.now();
-  const rawRisk = await fs.readFile(riskPath);
+  await fs.readFile(riskPath);
   const tReadRisk = performance.now();
 
   // ── import and load through graph.js (same as server startup) ─────────────
-  const { loadRoutingGraph, getGraph, nearestNode, edgesForCells, edgeRisk } = await import('../src/routing/graph.js');
+  const { loadRoutingGraph, getGraph } = await import('../src/routing/graph.js');
   const tImport = performance.now();
 
   await loadRoutingGraph({ mode, graphPath, riskPath });

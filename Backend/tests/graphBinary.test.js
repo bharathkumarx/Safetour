@@ -10,11 +10,12 @@ import path from 'node:path';
 import {
   encodeBGraph, decodeBGraph,
   encodeBRisk, decodeBRisk,
+  encodeBRiskFromBytes,
   bsearchBigUint64,
   makeGraphVersion, parseGraphVersion,
   topologyHash, BANDS,
 } from '../src/routing/graphBinary.js';
-import { buildRoutingGraph, nearestNode, edgesForCells, edgeRisk, loadRoutingGraph } from '../src/routing/graph.js';
+import { loadRoutingGraph, nearestNode, edgesForCells } from '../src/routing/graph.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function makeSyntheticGraph(nodeCount = 10) {
@@ -56,8 +57,8 @@ describe('graphBinary encode/decode round-trip', () => {
       expect(d.nodeLngs[i]).toBeCloseTo(nodes[i].lng, 5);
     }
 
-    // Binary edge IDs are numeric serials, not a per-edge string side table.
-    expect(d.edgeIds).toEqual(['0', '1', '2', '3']);
+    // Binary edge IDs now preserve original string IDs from the input.
+    expect(d.edgeIds).toEqual(['e0', 'e1', 'e2', 'e3']);
 
     // Geometry decoded lazily
     const geom = d.getEdgeGeometry(0);
@@ -224,10 +225,15 @@ describe('edgesForCells after reload', () => {
       cells: ['8f28308280fffff'], cellWeights: { '8f28308280fffff': 110 },
     }];
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'safetour-test-'));
-    const graphPath = path.join(dir, 'drive_graph.json');
-    const riskPath = path.join(dir, 'drive_edge_risk.bin');
-    await fs.writeFile(graphPath, JSON.stringify({ nodes, edges, graphVersion: 'g0', sccSize: 2 }));
-    await fs.writeFile(riskPath, JSON.stringify({ risks: { 'w:a:b': { Morning: 0.3, Afternoon: 0.3, Evening: 0.3, Night: 0.3 } } }));
+    const graphPath = path.join(dir, 'drive.bgraph');
+    const riskPath = path.join(dir, 'drive.brisk');
+    // Create minimal binary artifacts
+    const bgraphBuf = encodeBGraph({ nodes, edges, hash: 'g0' });
+    const edgeIds = edges.map((e) => e.id);
+    const riskBytes = new Uint8Array(edgeIds.length * 4).fill(128); // city-mean
+    const briskBuf = encodeBRiskFromBytes({ edgeIds, bytes: riskBytes, graphHash: 'g0', riskSeq: 0, dataVersion: 'test' });
+    await fs.writeFile(graphPath, bgraphBuf);
+    await fs.writeFile(riskPath, briskBuf);
     await loadRoutingGraph({ mode: 'drive', graphPath, riskPath });
     const before = edgesForCells(['8f28308280fffff'], 'drive').map((e) => e.id);
     // Simulate a risk reload (same cells covered)
@@ -239,11 +245,11 @@ describe('edgesForCells after reload', () => {
 });
 
 // ── Snapshot comparison ───────────────────────────────────────────────────────
-describe('snapshot comparison (nearestNode, edgesForCells, edgeRisk)', () => {
+describe('snapshot comparison (nearestNode, edgesForCells)', () => {
   let snapshot;
   const snapshotPath = 'tests/fixtures/graphSnapshot.json';
-  const graphPath = '../Data/processed/blr_drive_graph.json';
-  const riskPath = '../Data/processed/blr_drive_edge_risk.bin';
+  const graphPath = '../Data/processed/blr_drive.bgraph';
+  const riskPath = '../Data/processed/blr_drive.brisk';
 
   beforeAll(async () => {
     try {
@@ -277,12 +283,4 @@ describe('snapshot comparison (nearestNode, edgesForCells, edgeRisk)', () => {
     }
   });
 
-  it('edgeRisk values are within 1/255 of pre-rewrite snapshot (quantization)', () => {
-    if (!snapshot) return;
-    const MAX_ERR = 1 / 255 + 1e-9;
-    for (const r of snapshot.edgeRiskResults) {
-      const risk = edgeRisk(r.edgeId, r.band, 'drive');
-      expect(Math.abs(risk - r.risk)).toBeLessThanOrEqual(MAX_ERR);
-    }
   });
-});

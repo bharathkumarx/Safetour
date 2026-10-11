@@ -3,6 +3,7 @@ import { buildOverpassQuery, parseOverpass, tileBboxes, fetchOverpassTile, reset
 import { validateOverpassUserAgent } from '../src/config/env.js';
 import { buildRoutingGraph, graphInfo, loadRoutingGraph, nearestNode, edgeRisk } from '../src/routing/graph.js';
 import { buildGraphs, largestScc } from '../scripts/buildGraph.js';
+import { encodeBGraph, encodeBRiskFromBytes } from '../src/routing/graphBinary.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -27,11 +28,21 @@ describe('Overpass and routing graph', () => {
     const data = { nodes: [{ id: 'a', lat: 12.9, lng: 77.6 }, { id: 'b', lat: 12.901, lng: 77.6 }], ways: [{ id: 'w', nodes: ['a', 'b'], tags: { highway: 'residential', oneway: 'yes' }, mode: 'drive' }] };
     const built = buildRoutingGraph(data);
     expect(built.edges).toHaveLength(1);
+    const nodesArray = [...built.nodes.values()];
     await fs.mkdir(fixtureDir, { recursive: true });
     for (const mode of ['drive', 'walk']) {
-      await fs.writeFile(path.join(fixtureDir, `${mode}.json`), JSON.stringify({ ...data, graphVersion: mode }));
-      await fs.writeFile(path.join(fixtureDir, `${mode}.bin`), JSON.stringify({ risks: { [built.edges[0].id]: { Morning: 0.2 } } }));
-      await loadRoutingGraph({ mode, graphPath: path.join(fixtureDir, `${mode}.json`), riskPath: path.join(fixtureDir, `${mode}.bin`) });
+      // Create binary artifacts
+      const bgraphBuf = encodeBGraph({ nodes: nodesArray, edges: built.edges, hash: 'test' });
+      const edgeIds = built.edges.map((e) => e.id);
+      const riskBytes = new Uint8Array(edgeIds.length * 4);
+      riskBytes.fill(128); // city-mean
+      riskBytes[0] = 51; // Morning 0.2 * 255 = 51
+      const briskBuf = encodeBRiskFromBytes({ edgeIds, bytes: riskBytes, graphHash: 'test', riskSeq: 0, dataVersion: 'test' });
+      const graphPath = path.join(fixtureDir, `${mode}.bgraph`);
+      const riskPath = path.join(fixtureDir, `${mode}.brisk`);
+      await fs.writeFile(graphPath, bgraphBuf);
+      await fs.writeFile(riskPath, briskBuf);
+      await loadRoutingGraph({ mode, graphPath, riskPath });
       expect(graphInfo(mode).edges).toBe(1);
       expect(edgeRisk(built.edges[0].id, 'Morning', mode)).toBe(0.2);
     }

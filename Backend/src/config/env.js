@@ -11,6 +11,7 @@ const envSchema = z.object({
   OVERPASS_TILE_DELAY_MS: z.coerce.number().int().min(0).default(10000),
   OVERPASS_USER_AGENT: z.string().default(''),
   OVERPASS_STALL_MINUTES: z.coerce.number().positive().default(20),
+  OVERPASS_FROM_CACHE_ONLY: z.coerce.number().int().min(0).max(1).default(0),
 });
 
 const parsed = envSchema.safeParse(process.env);

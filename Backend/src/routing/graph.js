@@ -22,8 +22,8 @@ import { fileURLToPath } from 'node:url';
 import KDBush from 'kdbush';
 import { latLngToCell } from 'h3-js';
 import {
-  decodeBGraph, decodeBRisk, bsearchBigUint64, makeGraphVersion, parseGraphVersion,
-  topologyHash, BANDS,
+  decodeBGraph, decodeBRisk, bsearchBigUint64, makeGraphVersion,
+  BANDS,
 } from './graphBinary.js';
 
 export { BANDS as bands };
@@ -126,25 +126,6 @@ function loadBRisk(riskBuf, edgeCount) {
   } catch {
     return { riskBytes: new Uint8Array(edgeCount * 4).fill(128), graphHash: '', riskSeq: 0 };
   }
-}
-
-/**
- * Parse legacy JSON edge risk into a Uint8Array in canonical BANDS order.
- * @param {object} risksObj - { edgeId: { band: number } }
- * @param {string[]} edgeIds - canonical edge ID order
- */
-function legacyRiskToBytes(risksObj, edgeIds) {
-  const bytes = new Uint8Array(edgeIds.length * 4);
-  bytes.fill(128); // 0.5 default
-  for (let i = 0; i < edgeIds.length; i++) {
-    const r = risksObj[edgeIds[i]];
-    if (!r) continue;
-    for (let b = 0; b < 4; b++) {
-      const v = r[BANDS[b]] ?? 0.5;
-      bytes[i * 4 + b] = Math.min(255, Math.max(0, Math.round(v * 255)));
-    }
-  }
-  return bytes;
 }
 
 /**
@@ -279,19 +260,14 @@ export async function loadRoutingGraph({
   graphPath = path.join(defaultArtifactDir, `blr_${mode}.bgraph`),
   riskPath = path.join(defaultArtifactDir, `blr_${mode}.brisk`),
 } = {}) {
-  // ── If caller passes a JSON path explicitly (e.g. tests), go straight to legacy ──
-  if (graphPath.endsWith('.json')) {
-    return _loadLegacyJson(mode, graphPath, riskPath);
-  }
-
   // ── Try binary .bgraph first ───────────────────────────────────────────────
   const binaryExists = await fs.access(graphPath).then(() => true).catch(() => false);
   if (binaryExists) {
     const [graphBuf, riskBuf] = await Promise.all([fs.readFile(graphPath), fs.readFile(riskPath).catch(() => null)]);
     let decoded;
     try { decoded = decodeBGraph(graphBuf); } catch {
-      // file exists but isn't binary (e.g. leftover JSON at .bgraph path) — fall through
-      return _loadLegacyJson(mode, graphPath, riskPath);
+      // file exists but isn't binary (e.g. leftover JSON at .bgraph path) — throw error
+      throw new Error(`Graph artifact at ${graphPath} is not a valid binary .bgraph`);
     }
     const { riskBytes, riskSeq } = riskBuf ? loadBRisk(riskBuf, decoded.edgeCount) : { riskBytes: new Uint8Array(decoded.edgeCount * 4).fill(128), riskSeq: 0 };
     const gv = makeGraphVersion(decoded.hash, riskSeq);
@@ -299,108 +275,11 @@ export async function loadRoutingGraph({
     return state[mode];
   }
 
-  // ── Legacy JSON fallback (for backward compat with old JSON artifacts) ────
-  const legacyGraphPath = graphPath.replace(/\.bgraph$/, '_graph.json');
-  const legacyRiskPath = riskPath.replace ? riskPath.replace(/\.brisk$/, '_edge_risk.bin') : riskPath;
-  const jsonExists = await fs.access(legacyGraphPath).then(() => true).catch(() => false);
-  if (jsonExists) return _loadLegacyJson(mode, legacyGraphPath, legacyRiskPath);
-  // Last resort: try the traditional default paths
-  const origGraph = path.join(defaultArtifactDir, `blr_${mode}_graph.json`);
-  const origRisk = path.join(defaultArtifactDir, `blr_${mode}_edge_risk.bin`);
-  return _loadLegacyJson(mode, origGraph, origRisk);
+  // If binary files not found, throw error instead of falling back to legacy
+  throw new Error(`Graph artifacts not found: ${graphPath} or ${riskPath}`);
 }
 
-
-async function _loadLegacyJson(mode, graphPath, riskPath) {
-  const data = JSON.parse(await fs.readFile(graphPath, 'utf8'));
-  let risksObj = {};
-  try { risksObj = JSON.parse((await fs.readFile(riskPath)).toString('utf8')).risks || {}; } catch { /* ok */ }
-
-  const built = data.edges
-    ? (() => {
-      const nodeMap = new Map(data.nodes.map((node) => [String(node.id), node]));
-      const edgeById = new Map();
-      for (const edge of data.edges) edgeById.set(edge.id, edge);
-      return { edges: data.edges, edgeById, nodes: nodeMap };
-    })()
-    : buildRoutingGraph(data);
-
-  const edgeIds = built.edges.map((e) => e.id);
-  const nodeArr = [...built.nodes.values()];
-  const hash = topologyHash(nodeArr.length, built.edges.length, edgeIds[0] || '');
-  const riskBytes = legacyRiskToBytes(risksObj, edgeIds);
-
-  // Build typed arrays from the JS objects
-  const nodeCount = nodeArr.length;
-  const edgeCount = built.edges.length;
-  const nodeLats = new Float64Array(nodeCount);
-  const nodeLngs = new Float64Array(nodeCount);
-  const nodeIds = [];
-  const nodeSerialMap = new Map();
-  nodeArr.forEach((n, i) => {
-    nodeLats[i] = n.lat; nodeLngs[i] = n.lng;
-    nodeIds.push(String(n.id)); nodeSerialMap.set(String(n.id), i);
-  });
-
-  const edgeFrom = new Uint32Array(edgeCount);
-  const edgeTo = new Uint32Array(edgeCount);
-  const edgeLengthM = new Float32Array(edgeCount);
-  const edgeHwClass = new Uint8Array(edgeCount);
-  const edgeGeomCache = new Array(edgeCount);
-  const edgeCellCache = new Array(edgeCount);
-  const edgeSerialMap = new Map();
-  for (let i = 0; i < edgeCount; i++) {
-    const e = built.edges[i];
-    edgeFrom[i] = nodeSerialMap.get(e.from) ?? 0;
-    edgeTo[i] = nodeSerialMap.get(e.to) ?? 0;
-    edgeLengthM[i] = e.length || 0;
-    edgeGeomCache[i] = e.geometry;
-    edgeCellCache[i] = e.cells;
-    edgeSerialMap.set(e.id, i);
-  }
-
-  const getEdgeGeometry = (i) => edgeGeomCache[i] || [];
-  const getEdgeCells = (i) => edgeCellCache[i] || [];
-
-  // Minimal decoded-like object for buildState
-  const decoded = {
-    nodeCount, edgeCount, hash,
-    nodeLats, nodeLngs, nodeIds,
-    edgeFrom, edgeTo, edgeLengthM, edgeHwClass,
-    edgeGeomOff: new Uint32Array(edgeCount),
-    edgeGeomLen: new Uint32Array(edgeCount),
-    edgeCellOff: new Uint32Array(edgeCount),
-    edgeCellLen: new Uint16Array(edgeCount),
-    edgeIds, cellPool: new BigUint64Array(0),
-    csrSortedCells: new BigUint64Array(0),
-    csrOffsets: new Uint32Array(1),
-    csrEdgeIds: new Uint32Array(0),
-    getEdgeGeometry, getEdgeCells,
-  };
-
-  // Build H3 cell lookup for edgesForCells: Map<cell, edgeIdx[]>
-  const cellToEdges = new Map();
-  for (let i = 0; i < edgeCount; i++) {
-    for (const cell of edgeCellCache[i] || []) {
-      if (!cellToEdges.has(cell)) cellToEdges.set(cell, []);
-      cellToEdges.get(cell).push(i);
-    }
-  }
-
-  const gv = makeGraphVersion(hash, 0);
-  const st = buildState(decoded, riskBytes, data.graphVersion || gv,
-    data.sccSize ?? nodeArr.length, data.nodesDropped ?? 0);
-  // Attach legacy cell lookup for edgesForCells (binary format uses CSR)
-  st._legacyCellMap = cellToEdges;
-  // Override edgeSerialMap with the correctly computed one
-  st.edgeSerialMap = edgeSerialMap;
-  // Preserve original node/edge IDs
-  st.nodeSerialMap = nodeSerialMap;
-  state[mode] = st;
-  return state[mode];
-}
-
-/** Reload only edge risk from .brisk (or legacy .bin). */
+/** Reload only edge risk from .brisk. */
 export const reloadEdgeRisk = async (
   mode = 'drive',
   riskPath = path.join(defaultArtifactDir, `blr_${mode}.brisk`),
@@ -408,21 +287,14 @@ export const reloadEdgeRisk = async (
   if (!state[mode]) return loadRoutingGraph({ mode });
   const st = state[mode];
   const briskExists = await fs.access(riskPath).then(() => true).catch(() => false);
-  if (briskExists) {
-    const riskBuf = await fs.readFile(riskPath);
-    const { riskBytes, riskSeq } = loadBRisk(riskBuf, st.edgeCount);
-    st.riskBytes = riskBytes;
-    st.graphVersion = makeGraphVersion(st.hash, riskSeq);
-    st._risksObj = null; // invalidate lazy proxy
-    return st;
+  if (!briskExists) {
+    throw new Error(`Edge risk artifact not found: ${riskPath}`);
   }
-  // Legacy JSON fallback
-  const legacyRiskPath = path.join(defaultArtifactDir, `blr_${mode}_edge_risk.bin`);
-  try {
-    const risksObj = JSON.parse((await fs.readFile(legacyRiskPath)).toString('utf8')).risks || {};
-    st.riskBytes = legacyRiskToBytes(risksObj, st.edgeIds);
-    st._risksObj = null;
-  } catch { /* no risk file, keep existing */ }
+  const riskBuf = await fs.readFile(riskPath);
+  const { riskBytes, riskSeq } = loadBRisk(riskBuf, st.edgeCount);
+  st.riskBytes = riskBytes;
+  st.graphVersion = makeGraphVersion(st.hash, riskSeq);
+  st._risksObj = null; // invalidate lazy proxy
   return st;
 };
 

@@ -45,7 +45,7 @@ async function request(path, options = {}) {
     ...options,
   });
 
-  let payload = null;
+  let payload;
   try {
     payload = await response.json();
   } catch {

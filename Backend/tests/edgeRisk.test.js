@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  roundByte, cityMeanByte, CITY_MEAN_FALLBACK_RISK,
+  roundByte, cityMeanByte,
   edgeBandByte, patchRiskBytes, computeEdgeRiskBytes,
-  edgesFromBgraph, decodeCellRiskMap, computeRiskStats,
+  decodeCellRiskMap, computeRiskStats,
   BANDS,
 } from '../src/routing/edgeRisk.js';
 
@@ -102,19 +102,19 @@ describe('edgeRisk core functions', () => {
   });
 });
 
-describe('20-edge length-weighted spot check', () => {
-  it('matches independently computed length-weighted risk within 1/255', () => {
-    // Build a cellRiskMap with known values
+describe('50-edge length-weighted spot check', () => {
+  it('matches independently computed length-weighted risk within 1/255 across all 4 bands', () => {
+    // Build a cellRiskMap with known values for 50 cells
     const cellRiskMap = new Map();
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 50; i++) {
       for (const band of BANDS) {
-        cellRiskMap.set(`c${i}:${band}`, (i + 1) / 25);
+        cellRiskMap.set(`c${i}:${band}`, (i + 1) / 55); // 0.018 to 0.927
       }
     }
 
-    // Create 20 edge descriptors with known cells and weights
+    // Create 50 edge descriptors with known cells and weights
     const edges = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 50; i++) {
       const cell = `c${i}`;
       edges.push({ serial: i, id: `e${i}`, cells: [cell], cellWeights: { [cell]: 1 } });
     }
@@ -122,11 +122,10 @@ describe('20-edge length-weighted spot check', () => {
     // Compute risk bytes using our shared function
     const { bytes } = computeEdgeRiskBytes(edges, cellRiskMap, 0.5);
 
-    // Verify each edge's bands using the same edgeBandByte logic (independent computation)
-    for (let i = 0; i < 20; i++) {
+    // Verify each edge's 4 bands using the same edgeBandByte logic (independent computation)
+    for (let i = 0; i < 50; i++) {
       for (let b = 0; b < BANDS.length; b++) {
-        const band = BANDS[b];
-        const expectedRisk = (i + 1) / 25;
+        const expectedRisk = (i + 1) / 55;
         const expectedByte = Math.max(0, Math.min(255, Math.round(expectedRisk * 255)));
         const actualByte = bytes[i * 4 + b];
         const diff = Math.abs(actualByte - expectedByte);

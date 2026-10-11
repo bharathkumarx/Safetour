@@ -42,9 +42,11 @@ vi.mock('../src/routing/graph.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    edgesForCells: (cells, mode) => {
+    edgesForCells: (cells, _mode) => {
       return cells.includes('c1') ? [{ id: 'e1', serial: 0, cells: ['c1'], cellWeights: { c1: 2 } }] : [];
     },
+    getGraph: actual.getGraph,
+    loadRoutingGraph: actual.loadRoutingGraph,
     // Mock sampleCells to return the cells we want for testing
     sampleCells: (geometry) => {
       // First edge geometry (serial 0) -> return c1
@@ -109,5 +111,79 @@ describe('edge risk refresh (binary .brisk)', () => {
     expect(e1Bytes[1]).toBe(153);
     expect(e1Bytes[2]).toBe(102);
     expect(e1Bytes[3]).toBe(204);
+  });
+
+  it('regression: reloadEdgeRisk reloads .brisk from disk and updates in-memory state', async () => {
+    const { decodeBRisk, encodeBRiskFromBytes, encodeBGraph } = await import('../src/routing/graphBinary.js');
+    const { reloadEdgeRisk, loadRoutingGraph, getGraph } = await import('../src/routing/graph.js');
+
+    // Create minimal binary topology for 2 edges
+    const nodes = [
+      { id: 'a', lat: 12.97, lng: 77.59 },
+      { id: 'b', lat: 12.98, lng: 77.60 },
+      { id: 'c', lat: 12.99, lng: 77.61 },
+      { id: 'd', lat: 13.00, lng: 77.62 },
+    ];
+    const edges = [
+      { id: 'e1', from: 'a', to: 'b', length: 100, geometry: [{ lat: 12.97, lng: 77.59 }, { lat: 12.98, lng: 77.60 }], tags: {}, cells: ['c1'], cellWeights: { c1: 2 } },
+      { id: 'e2', from: 'c', to: 'd', length: 100, geometry: [{ lat: 12.99, lng: 77.61 }, { lat: 13.00, lng: 77.62 }], tags: {}, cells: ['c2'], cellWeights: { c2: 2 } },
+    ];
+    const hash = 'abcdef1234567890';
+    const bgraphBuf = encodeBGraph({ nodes, edges, hash });
+    const bgraphPath = outputPath.replace('.brisk', '.bgraph');
+    await fs.writeFile(bgraphPath, bgraphBuf);
+
+    // Create initial .brisk with seq=5
+    const initialBytes = new Uint8Array(2 * 4);
+    initialBytes[0] = 10; initialBytes[1] = 20; initialBytes[2] = 30; initialBytes[3] = 40; // e1
+    initialBytes[4] = 50; initialBytes[5] = 60; initialBytes[6] = 70; initialBytes[7] = 80; // e2
+    const initialBrisk = encodeBRiskFromBytes({
+      edgeIds: ['e1', 'e2'],
+      bytes: initialBytes,
+      graphHash: hash,
+      riskSeq: 5,
+      dataVersion: 'v1',
+    });
+    await fs.writeFile(outputPath, initialBrisk);
+
+    // Load the graph first
+    await loadRoutingGraph({ mode: 'drive', graphPath: bgraphPath, riskPath: outputPath });
+    let g = getGraph('drive');
+    expect(g.graphVersion).toBe('abcdef1234567890:5');
+
+    // Modify the .brisk file externally (simulate external update with new values and seq=6)
+    const newBytes = new Uint8Array(2 * 4);
+    newBytes[0] = 51; newBytes[1] = 153; newBytes[2] = 102; newBytes[3] = 204; // e1 from CellRisk
+    newBytes[4] = 26; newBytes[5] = 77; newBytes[6] = 128; newBytes[7] = 179; // e2 from CellRisk
+    const newBrisk = encodeBRiskFromBytes({
+      edgeIds: ['e1', 'e2'],
+      bytes: newBytes,
+      graphHash: hash,
+      riskSeq: 6, // incremented sequence
+      dataVersion: 'v1',
+    });
+    await fs.writeFile(outputPath, newBrisk);
+
+    // Call reloadEdgeRisk - should reload from disk and update in-memory state
+    await reloadEdgeRisk('drive', outputPath);
+
+    // Verify the .brisk was reloaded
+    const updatedRaw = await fs.readFile(outputPath);
+    const decoded = decodeBRisk(updatedRaw);
+    expect(decoded.riskSeq).toBe(6);
+    expect(decoded.graphHash).toBe(hash);
+    expect(decoded.dataVersion).toBe('v1');
+
+    // Verify in-memory graph state was updated
+    g = getGraph('drive');
+    expect(g.graphVersion).toBe('abcdef1234567890:6');
+
+    // Verify e1 was reloaded with new values
+    const e1Bytes = g.riskBytes.subarray(0, 4);
+    expect(e1Bytes[0]).toBe(51); // Morning 0.2 * 255 = 51
+
+    // Verify e2 was reloaded with new values
+    const e2Bytes = g.riskBytes.subarray(4, 8);
+    expect(e2Bytes[0]).toBe(26); // c2 Morning 0.1 * 255 = 25.5 → 26
   });
 });

@@ -63,14 +63,6 @@ async function initialReference() {
   return latestBaseline?.timestamp ?? new Date(0);
 }
 
-function errorIndex(error) {
-  return new Set((error.writeErrors || []).map((item) => item.index));
-}
-
-/**
- * Validate, deduplicate, normalize, and insert incidents from any row source.
- * If is_night is absent, it falls back to the hour-based night calculation.
- */
 export async function ingestRows(rows, { source = 'unknown', dryRun = false, deferMetadata = false } = {}) {
   const inputRows = [];
   for await (const row of rows) inputRows.push(row);

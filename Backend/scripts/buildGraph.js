@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,8 +6,8 @@ import { env, validateOverpassUserAgent } from '../src/config/env.js';
 import { Metadata } from '../src/models/CellRisk.js';
 import { cachePathForTile, fetchOverpassTile, tileBboxes, overpassStatus, cachedTileStatus } from '../src/services/overpass.js';
 import { buildRoutingGraph, loadRoutingGraph } from '../src/routing/graph.js';
-import { encodeBGraph, encodeBRisk, encodeBRiskFromBytes, topologyHash, makeGraphVersion, parseGraphVersion } from '../src/routing/graphBinary.js';
-import { decodeCellRiskMap, computeEdgeRiskBytes, cityMeanByte, CITY_MEAN_FALLBACK_RISK } from '../src/routing/edgeRisk.js';
+import { encodeBGraph, encodeBRiskFromBytes, topologyHash, makeGraphVersion, parseGraphVersion } from '../src/routing/graphBinary.js';
+import { decodeCellRiskMap, computeEdgeRiskBytes, CITY_MEAN_FALLBACK_RISK } from '../src/routing/edgeRisk.js';
 
 const bounds = [12.80, 77.45, 13.18, 77.80];
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -145,7 +144,6 @@ export async function writeRiskArtifacts(results, {
   if (cellRiskMap.size === 0) {
     throw new Error('EDGE_RISK_NO_CELLRISK: CellRisk is empty; refusing to write a flat .brisk (run build:risk first)');
   }
-  const meanByte = cityMeanByte(cityMeanRisk);
   for (const [mode, graph] of Object.entries(results)) {
     const edgeIds = graph.edges.map((e) => e.id);
     const edges = edgesForRisk(graph);
@@ -191,43 +189,8 @@ export async function buildGraphs({
   return results;
 }
 
-/**
- * Convert existing JSON artifacts to binary format without any network request.
- * Used by: npm run build:graph -- --convert
- */
-export async function convertJsonToBinary(outputDir = defaultOutputDir) {
-  for (const mode of ['drive', 'walk']) {
-    const jsonPath = path.join(outputDir, `blr_${mode}_graph.json`);
-    const riskJsonPath = path.join(outputDir, `blr_${mode}_edge_risk.bin`);
-    let data, risksObj = {};
-    try { data = JSON.parse(await fs.readFile(jsonPath, 'utf8')); } catch { continue; }
-    try { risksObj = JSON.parse((await fs.readFile(riskJsonPath)).toString('utf8')).risks || {}; } catch { /* ok */ }
-    const nodes = data.nodes || [];
-    const edges = data.edges || [];
-    const hash = topologyHash(nodes.length, edges.length, edges[0]?.id || '');
-    const { seq } = parseGraphVersion(data.graphVersion || '');
-    const bgraphBuf = encodeBGraph({ nodes, edges, hash });
-    const edgeIds = edges.map((e) => e.id);
-    const briskBuf = encodeBRisk({ edgeIds, risks: risksObj, graphHash: hash, riskSeq: seq });
-    const bgraphPath = path.join(outputDir, `blr_${mode}.bgraph`);
-    const briskPath = path.join(outputDir, `blr_${mode}.brisk`);
-    await fs.writeFile(`${bgraphPath}.next`, bgraphBuf); await fs.rename(`${bgraphPath}.next`, bgraphPath);
-    await fs.writeFile(`${briskPath}.next`, briskBuf); await fs.rename(`${briskPath}.next`, briskPath);
-    const bgraphStat = await fs.stat(bgraphPath);
-    const briskStat = await fs.stat(briskPath);
-    console.log(`[convert] ${mode}: bgraph ${(bgraphStat.size / 1024 / 1024).toFixed(1)} MiB, brisk ${(briskStat.size / 1024 / 1024).toFixed(1)} MiB`);
-  }
-}
-
 if (import.meta.url === `file://${process.argv[1]}`) {
   const args = parseArgs(process.argv.slice(2));
-
-  if (args.convert) {
-    console.log('[build:graph] --convert: converting JSON artifacts to binary (no network)');
-    await convertJsonToBinary();
-    console.log('[build:graph] conversion complete');
-    process.exit(0);
-  }
 
   if (args.fromCache) {
     // Refuse any network request when --from-cache is set

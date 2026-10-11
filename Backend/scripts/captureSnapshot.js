@@ -20,7 +20,6 @@ await loadRoutingGraph({
 });
 
 const g = getGraph('drive');
-const allNodes = [...g.nodes.values()];
 const allEdges = g.edges;
 
 // 50 seeded nearestNode queries

@@ -49,3 +49,7 @@ paths:
       responses:
         '200': { description: Bangalore-bounded Nominatim results }
         '422': { description: Missing query }
+  /baseline:
+    get:
+      responses:
+        '200': { description: Baseline dataset hash }

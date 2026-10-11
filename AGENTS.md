@@ -11,8 +11,9 @@ MVP features:
   csv-parse, ngraph.graph + ngraph.path, helmet, cors, compression, express-rate-limit, pino + pino-http,
   node-cache, swagger-ui-express, dotenv
 - Backend tests: Vitest + Supertest + mongodb-memory-server. Lint: ESLint + Prettier.
-- Frontend/: React 18 + Vite (JavaScript/JSX), Tailwind, shadcn/ui (JS mode), react-map-gl + maplibre-gl,
-  @tanstack/react-query, zustand, framer-motion, lucide-react. Tests: Vitest + Testing Library; e2e: Playwright.
+- Frontend/: React 18 + Vite (JavaScript/JSX), plain CSS (component-scoped CSS files); no Tailwind,
+  react-map-gl + maplibre-gl, @tanstack/react-query, zustand, framer-motion, lucide-react.
+  Tests: Vitest + Testing Library; e2e: Playwright.
 - Data/: bangalore_crime_dataset.csv (immutable baseline, never modify), demo_live_incidents.csv (synthetic demo fixture, created in Prompt 03A)
 - docs/: API.md, openapi.yaml, LIVE_DATA.md
 

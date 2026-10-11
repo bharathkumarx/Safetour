@@ -9,6 +9,7 @@ import Legend from './components/Legend.jsx';
 import TimeSlider, { useDebouncedValue } from './components/TimeSlider.jsx';
 import { useDataStatus, useHeatmap, useMeta } from './lib/api.js';
 import { useMapStore, getTimeBandForHour } from './store/mapStore.js';
+import ErrorBoundary from './components/ErrorBoundary.jsx';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -54,9 +55,34 @@ function AppContent() {
 
   return (
     <main className="app-shell">
-      <SafeTourMap selectedPoint={selectedPoint} onMapReady={handleMapReady}>
-        <HeatmapLayer data={heatmapQuery.data} layerMode={layerMode} enabled={mapReady && !!heatmapQuery.data} />
-      </SafeTourMap>
+      <ErrorBoundary
+        fallback={(error, reload) => (
+          <div className="map-fallback">
+            <h2>Map Unavailable</h2>
+            <p style={{ margin: '0.5rem 0', maxWidth: '500px' }}>{error?.message || 'Failed to load map'}</p>
+            <button
+              type="button"
+              onClick={reload}
+              style={{
+                marginTop: '1rem',
+                padding: '0.75rem 1.5rem',
+                background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+                border: 'none',
+                borderRadius: '10px',
+                color: '#052e16',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Reload Map
+            </button>
+          </div>
+        )}
+      >
+        <SafeTourMap selectedPoint={selectedPoint} onMapReady={handleMapReady}>
+          <HeatmapLayer data={heatmapQuery.data} layerMode={layerMode} enabled={mapReady && !!heatmapQuery.data} />
+        </SafeTourMap>
+      </ErrorBoundary>
 
       <div className="top-bar">
         <FilterPanel
@@ -98,10 +124,18 @@ function AppContent() {
   );
 }
 
+function AppWithRootBoundary() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AppContent />
+      <AppWithRootBoundary />
     </QueryClientProvider>
   );
 }
