@@ -20,6 +20,8 @@
     "backfill:fingerprints": "node scripts/backfillFingerprints.js",
     "build:risk": "node scripts/buildRiskTables.js",
     "build:graph": "node scripts/buildGraph.js",
+    "build:edge-risk": "node scripts/buildEdgeRisk.js",
+    "graph:risk-stats": "node scripts/graphRiskStats.js",
     "graph:measure": "node --expose-gc scripts/measureGraphMemory.js"
   },
   "keywords": [],

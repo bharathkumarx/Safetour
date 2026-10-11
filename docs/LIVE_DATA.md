@@ -14,6 +14,21 @@ The metadata singleton records the frozen recency reference, latest incident,
 historical range, data version, and freshness. An incident without
 `is_night` uses `hour >= 20 || hour < 5` as the documented fallback.
 
+## Build ordering
+
+The canonical build order is:
+
+```bash
+npm run seed           # loads baseline CSV into MongoDB (incidents)
+npm run build:risk     # computes CellRisk for all H3 cells (frozen references)
+npm run build:graph    # builds road topology (.bgraph) from OSM tiles
+npm run build:edge-risk  # computes edge risk bytes (.brisk) from CellRisk
+```
+
+`build:edge-risk` is idempotent and safe to re-run. It reads the current CellRisk and topology, recomputes all edge risk bytes, bumps `riskSeq`, and writes the binary `.brisk` atomically. It fails loudly (`EDGE_RISK_NO_CELLRISK`) if CellRisk is empty.
+
+`build:graph` (including `--from-cache`) also fails loudly on empty CellRisk — never silently writes flat values.
+
 ## Risk refresh pipeline
 
 `npm run build:risk` is the periodic/nightly full rebuild. It uses all stored

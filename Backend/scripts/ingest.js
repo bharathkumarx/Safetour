@@ -34,13 +34,13 @@ try {
 }
 if (graphLoaded) {
   const info = graphInfo('drive');
-  const graphPath = path.resolve(process.cwd(), '../Data/processed/blr_drive_graph.json');
-  const riskPath = path.resolve(process.cwd(), '../Data/processed/blr_drive_edge_risk.bin');
+  const graphPath = path.resolve(process.cwd(), '../Data/processed/blr_drive.bgraph');
+  const riskPath = path.resolve(process.cwd(), '../Data/processed/blr_drive.brisk');
   const [graphFile, riskFile] = await Promise.all([fs.stat(graphPath), fs.stat(riskPath)]);
   console.log(`graph facts: nodes ${info.nodes}, edges ${info.edges}, average edges per node ${(info.edges / info.nodes).toFixed(3)}, SCC ${info.sccSize}, nodes dropped ${info.nodesDropped}, graphVersion ${info.graphVersion}`);
   console.log(`graph load time: ${Math.round(performance.now() - graphStarted)}ms, heap used after loading: ${process.memoryUsage().heapUsed} bytes`);
   console.log(`graph files: topology ${graphFile.size} bytes, edge risk ${riskFile.size} bytes`);
-  console.log('edge risk representation: JSON band values (not Float32 or Uint8); bytes per edge are approximate and include JSON keys/overhead');
+  console.log('edge risk representation: binary Uint8 band values (4 bytes per edge)');
 }
 const rows = csvSource.fetchRows({ filePath: path.resolve(process.cwd(), '..', filePath) });
 const result = await ingestRows(rows, { source, dryRun, deferMetadata: !noRefresh });

@@ -11,12 +11,12 @@ import { loadRoutingGraph, nearestNode, edgesForCells, edgeRisk, getGraph } from
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const processedDir = path.join(repoRoot, 'Data/processed');
-const outFile = path.resolve('tests/fixtures/graph_snapshot.json');
+const outFile = path.resolve('tests/fixtures/graphSnapshot.json');
 
 await loadRoutingGraph({
   mode: 'drive',
-  graphPath: path.join(processedDir, 'blr_drive_graph.json'),
-  riskPath: path.join(processedDir, 'blr_drive_edge_risk.bin'),
+  graphPath: path.join(processedDir, 'blr_drive.bgraph'),
+  riskPath: path.join(processedDir, 'blr_drive.brisk'),
 });
 
 const g = getGraph('drive');

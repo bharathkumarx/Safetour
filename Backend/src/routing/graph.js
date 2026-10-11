@@ -76,7 +76,10 @@ export function buildRoutingGraph({ nodes = [], ways = [] } = {}) {
   return { edges, edgeById, nodes: nodeMap };
 }
 
-function sampleCells(geometry) {
+/** Sample H3 cells (length-weighted) along a polyline geometry. Exported for the
+ * edge-risk builders so the binary path reproduces an offline full build exactly.
+ */
+export function sampleCells(geometry) {
   const cells = new Set(); const weights = {}; let carry = 0;
   for (let i = 1; i < geometry.length; i += 1) {
     const a = geometry[i - 1]; const b = geometry[i]; const length = haversine(a, b); const count = Math.max(1, Math.ceil((carry + length) / 50));

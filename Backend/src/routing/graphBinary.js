@@ -116,6 +116,22 @@ export function encodeBRisk({ edgeIds, risks, graphHash, riskSeq, dataVersion = 
   edgeIds.forEach((id, i) => BANDS.forEach((band, b) => { const v = risks[id]?.[band] ?? 0.5; out[i * 4 + header + b] = Math.max(0, Math.min(255, Math.round(v * 255))); }));
   return out;
 }
+/** Encode edge risk from a pre-quantized byte buffer (4 bytes per edge, BANDS order). */
+export function encodeBRiskFromBytes({ edgeIds, bytes, graphHash, riskSeq, dataVersion = '' }) {
+  const text = new TextEncoder().encode(dataVersion);
+  const header = align(40 + text.length);
+  if (bytes.length !== edgeIds.length * 4) throw new Error('BRISK byte length mismatch');
+  const out = Buffer.alloc(header + bytes.length);
+  out.write(BRISK_MAGIC, 0);
+  out.writeUInt8(1, 5);
+  out.write(String(graphHash).padEnd(16, '0').slice(0, 16), 6, 'ascii');
+  out.writeUInt32LE(edgeIds.length, 22);
+  out.writeUInt32LE(riskSeq >>> 0, 26);
+  out.writeUInt16LE(text.length, 30);
+  text.forEach((b, i) => out.writeUInt8(b, 32 + i));
+  new Uint8Array(out.buffer, out.byteOffset + header, bytes.length).set(bytes);
+  return out;
+}
 export function decodeBRisk(input) {
   if (input.toString('ascii', 0, 5) !== BRISK_MAGIC) throw new Error('Not a .brisk file');
   const edgeCount = input.readUInt32LE(22); const len = input.readUInt16LE(30); const header = align(40 + len);

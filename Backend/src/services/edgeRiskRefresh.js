@@ -1,72 +1,80 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Metadata } from '../models/CellRisk.js';
-import { CellRisk } from '../models/CellRisk.js';
+import { Metadata, CellRisk } from '../models/CellRisk.js';
 import { getDataStore } from './dataStore.js';
-import { edgesForCells, getGraph } from '../routing/graph.js';
-import { encodeBRisk, parseGraphVersion } from '../routing/graphBinary.js';
+import { edgesForCells, getGraph, sampleCells } from '../routing/graph.js';
+import { decodeBRisk, encodeBRiskFromBytes, parseGraphVersion } from '../routing/graphBinary.js';
+import { decodeCellRiskMap, patchRiskBytes, cityMeanByte, CITY_MEAN_FALLBACK_RISK } from '../routing/edgeRisk.js';
 
-const bands = ['Morning', 'Afternoon', 'Evening', 'Night'];
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const defaultArtifactDir = path.join(repoRoot, 'Data/processed');
 
 /** Refresh only edges touching affected H3 cells, preserving unaffected risk values. */
-export async function refreshEdgeRisks(cellIds = [], { mode = 'drive', outputPath = path.join(defaultArtifactDir, `blr_${mode}_edge_risk.bin`) } = {}) {
-  const store = getDataStore(); const graph = store.routing?.[mode] || getGraph(mode) || store.routing;
+export async function refreshEdgeRisks(cellIds = [], { mode = 'drive', outputPath = path.join(defaultArtifactDir, `blr_${mode}.brisk`) } = {}) {
+  const store = getDataStore();
+  const graph = store.routing?.[mode] || getGraph(mode) || store.routing;
   if (!graph) return { refreshed: 0 };
-  const edges = cellIds.length ? edgesForCells(cellIds, mode) : graph.edges;
-  const currentRisks = await CellRisk.find(cellIds.length ? { h3: { $in: cellIds } } : {}).select('h3 band risk').lean();
-  const riskMap = new Map(currentRisks.map((risk) => [`${risk.h3}:${risk.band}`, risk]));
-  const target = path.resolve(outputPath); let risks = {};
-  try { risks = JSON.parse((await fs.readFile(target)).toString('utf8')).risks || {}; } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const cityMean = store.metadata?.cityMeanRisk ?? 0.5;
-  let fallbackCount = 0;
-  // Keep a complete risk matrix in every artifact. This is important when a
-  // first incremental refresh follows a topology build with no prior brisk.
-  for (const edge of graph.edges) {
-    if (!risks[edge.id]) risks[edge.id] = {};
-    for (const band of bands) if (risks[edge.id][band] == null) {
-      risks[edge.id][band] = cityMean;
-      fallbackCount += 1;
-    }
+
+  const target = path.resolve(outputPath);
+  const briskPath = target.endsWith('.brisk') ? target : target.replace(/(_edge_risk\.bin|\.json)$/, '.brisk');
+
+  // Load prior .brisk risk bytes if available
+  let riskBytes;
+  let prevSeq = 0;
+  let graphHash = graph.hash || '0000000000000000';
+  try {
+    const raw = await fs.readFile(briskPath);
+    const decoded = decodeBRisk(raw);
+    riskBytes = new Uint8Array(decoded.riskBytes);
+    prevSeq = decoded.riskSeq ?? 0;
+    if (decoded.graphHash) graphHash = decoded.graphHash;
+  } catch {
+    riskBytes = new Uint8Array(graph.edgeCount * 4).fill(cityMeanByte(store.metadata?.cityMeanRisk ?? CITY_MEAN_FALLBACK_RISK));
   }
-  for (const edge of edges) {
-    risks[edge.id] = {};
-    for (const band of bands) {
-      let total = 0; let weight = 0;
-      for (const cell of edge.cells) {
-        const value = riskMap.get(`${cell}:${band}`) ?? store.cellRisks.get(`${cell}:${band}`);
-        const cellWeight = edge.cellWeights?.[cell] || 1;
-        if (value) { total += value.risk * cellWeight; weight += cellWeight; }
-      }
-      if (!weight) fallbackCount += 1;
-      risks[edge.id][band] = weight ? total / weight : cityMean;
-    }
+
+  // Load all CellRisk entries or only affected cell entries
+  const currentCellRisks = await CellRisk.find({}).select('h3 band risk').lean();
+  const cellRiskMap = decodeCellRiskMap(currentCellRisks);
+  if (cellRiskMap.size === 0) {
+    throw new Error('EDGE_RISK_NO_CELLRISK: CellRisk is empty; refusing to update edge risks');
   }
+
+  const affectedEdges = cellIds.length ? edgesForCells(cellIds, mode) : graph.edges;
+  const edgeDescriptors = affectedEdges.map((e) => {
+    const serial = e.serial ?? (graph.edgeSerialMap?.get(e.id) ?? graph.edgeIds.indexOf(e.id));
+    const geometry = graph.getEdgeGeometry ? graph.getEdgeGeometry(serial) : e.geometry;
+    const { cells, weights } = geometry ? sampleCells(geometry) : { cells: e.cells || [], weights: e.cellWeights || null };
+    return { serial, id: e.id, cells, cellWeights: weights };
+  });
+
+  const cityMeanRisk = store.metadata?.cityMeanRisk ?? CITY_MEAN_FALLBACK_RISK;
+  const { fallbackBandCount } = patchRiskBytes(edgeDescriptors, cellRiskMap, cityMeanRisk, riskBytes);
+
   const metadata = await Metadata.findOne({}).lean();
-  // graphVersion: <topologyHash>:<seq+1>
-  const prevGv = metadata?.graphVersion || graph.graphVersion || '0000000000000000:0';
-  const { hash, seq } = parseGraphVersion(prevGv);
-  const newSeq = seq + 1;
-  const graphVersion = `${hash}:${newSeq}`;
+  const newSeq = prevSeq + 1;
+  const graphVersion = `${graphHash}:${newSeq}`;
 
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  // Write legacy JSON (for backward compat)
-  await fs.writeFile(`${target}.next`, JSON.stringify({ graphVersion, risks }));
-  await fs.rename(`${target}.next`, target);
+  const briskBuf = encodeBRiskFromBytes({
+    edgeIds: graph.edgeIds,
+    bytes: riskBytes,
+    graphHash,
+    riskSeq: newSeq,
+    dataVersion: metadata?.dataVersion || store.metadata?.dataVersion || '',
+  });
 
-  // Write binary .brisk alongside
-  const briskPath = target.endsWith('_edge_risk.bin')
-    ? target.replace(/_edge_risk\.bin$/, '.brisk')
-    : `${target}.brisk`;
-  const edgeIds = graph.edges.map((e) => e.id);
-  const briskBuf = encodeBRisk({ edgeIds, risks, graphHash: hash, riskSeq: newSeq, dataVersion: metadata?.dataVersion || '' });
+  await fs.mkdir(path.dirname(briskPath), { recursive: true });
   await fs.writeFile(`${briskPath}.next`, briskBuf);
   await fs.rename(`${briskPath}.next`, briskPath);
 
+  // Update in-memory graph riskBytes if loaded
+  if (graph.riskBytes && graph.riskBytes.length === riskBytes.length) {
+    graph.riskBytes.set(riskBytes);
+    if (graph.graphVersion !== undefined) graph.graphVersion = graphVersion;
+  }
+
   await Metadata.updateOne({}, { $set: { graphVersion } });
-  return { refreshed: edges.length, totalEdges: graph.edges.length, fallbackCount, graphVersion, edgeRiskFileUpdated: true };
+  return { refreshed: affectedEdges.length, totalEdges: graph.edgeCount, fallbackCount: fallbackBandCount, graphVersion, edgeRiskFileUpdated: true };
 }
 
 export function registerEdgeRiskRefresh() { return (cells) => refreshEdgeRisks(cells); }

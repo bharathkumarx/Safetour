@@ -7,7 +7,8 @@ import { env, validateOverpassUserAgent } from '../src/config/env.js';
 import { Metadata } from '../src/models/CellRisk.js';
 import { cachePathForTile, fetchOverpassTile, tileBboxes, overpassStatus, cachedTileStatus } from '../src/services/overpass.js';
 import { buildRoutingGraph, loadRoutingGraph } from '../src/routing/graph.js';
-import { encodeBGraph, encodeBRisk, topologyHash, makeGraphVersion, parseGraphVersion } from '../src/routing/graphBinary.js';
+import { encodeBGraph, encodeBRisk, encodeBRiskFromBytes, topologyHash, makeGraphVersion, parseGraphVersion } from '../src/routing/graphBinary.js';
+import { decodeCellRiskMap, computeEdgeRiskBytes, cityMeanByte, CITY_MEAN_FALLBACK_RISK } from '../src/routing/edgeRisk.js';
 
 const bounds = [12.80, 77.45, 13.18, 77.80];
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -115,40 +116,49 @@ async function buildMode(mode, { selectedTiles, resume = false, fromCache = fals
   };
 }
 
-export function computeEdgeRisks(edges, cellRisks = [], cityMeanRisk = 0.5) {
-  const lookup = new Map(cellRisks.map((risk) => [`${risk.h3}:${risk.band}`, risk]));
-  return Object.fromEntries(edges.map((edge) => [edge.id, Object.fromEntries(['Morning', 'Afternoon', 'Evening', 'Night'].map((band) => {
-    let total = 0; let weight = 0;
-    for (const cell of edge.cells) {
-      const value = lookup.get(`${cell}:${band}`); const cellWeight = edge.cellWeights?.[cell] || 1;
-      if (value) { total += value.risk * cellWeight; weight += cellWeight; }
+/**
+ * Edge descriptors for the shared risk builder. Built from a decoded `.bgraph`
+ * (or a freshly built in-memory graph) so both the offline full build and the
+ * incremental refresh use the exact same length-weighted sampler.
+ */
+function edgesForRisk(graph) {
+  const n = graph.edgeCount ?? graph.edges.length;
+  const arr = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const edge = graph.edges ? graph.edges[i] : null;
+    if (edge) {
+      arr[i] = { serial: edge.serial ?? i, id: edge.id, cells: edge.cells, cellWeights: edge.cellWeights };
+    } else {
+      const cells = graph.getEdgeCells(i);
+      arr[i] = { serial: i, id: graph.edgeIds[i], cells, cellWeights: null };
     }
-    return [band, weight ? total / weight : cityMeanRisk];
-  }))]));
-}
-
-function countFallbackEdges(edges, cellRisks = []) {
-  const lookup = new Set(cellRisks.map((risk) => `${risk.h3}:${risk.band}`));
-  return edges.filter((edge) => ['Morning', 'Afternoon', 'Evening', 'Night']
-    .some((band) => !(edge.cells || []).some((cell) => lookup.has(`${cell}:${band}`)))).length;
+  }
+  return arr;
 }
 
 export async function writeRiskArtifacts(results, {
-  outputDir = defaultOutputDir, cellRisks = [], cityMeanRisk = 0.5, dataVersion = '',
+  outputDir = defaultOutputDir, cellRisks = [], cityMeanRisk = CITY_MEAN_FALLBACK_RISK, dataVersion = '',
 } = {}) {
   await fs.mkdir(outputDir, { recursive: true });
+  // Build once; computeEdgeRiskBytes throws EDGE_RISK_NO_CELLRISK when empty.
+  const cellRiskMap = decodeCellRiskMap(cellRisks);
+  if (cellRiskMap.size === 0) {
+    throw new Error('EDGE_RISK_NO_CELLRISK: CellRisk is empty; refusing to write a flat .brisk (run build:risk first)');
+  }
+  const meanByte = cityMeanByte(cityMeanRisk);
   for (const [mode, graph] of Object.entries(results)) {
     const edgeIds = graph.edges.map((e) => e.id);
-    const risks = computeEdgeRisks(graph.edges, cellRisks, cityMeanRisk);
-    const fallbackEdges = countFallbackEdges(graph.edges, cellRisks);
+    const edges = edgesForRisk(graph);
+    const { bytes, fallbackBandCount } = computeEdgeRiskBytes(edges, cellRiskMap, cityMeanRisk);
     const hash = graph.hash || topologyHash(graph.nodes.length, graph.edges.length, edgeIds[0] || '');
     const { seq } = parseGraphVersion(graph.graphVersion);
-    // Write binary .brisk
+    const briskBuf = encodeBRiskFromBytes({ edgeIds, bytes, graphHash: hash, riskSeq: seq, dataVersion });
     const briskPath = path.join(outputDir, `blr_${mode}.brisk`);
-    const briskBuf = encodeBRisk({ edgeIds, risks, graphHash: hash, riskSeq: seq, dataVersion });
     await fs.writeFile(`${briskPath}.next`, briskBuf);
     await fs.rename(`${briskPath}.next`, briskPath);
-    console.log(`[build:graph] ${mode}: ${fallbackEdges} edges used city-mean risk fallback`);
+    const fallbackEdges = fallbackBandCount ? Math.round(fallbackBandCount / 4) : 0;
+    console.log(`[build:graph] ${mode}: ${fallbackEdges} edges used city-mean risk fallback (${fallbackBandCount}/${edges.length * 4} bands)`);
+    console.log(`[build:graph] ${mode}: wrote ${briskPath} (${briskBuf.length} bytes)`);
   }
 }
 
