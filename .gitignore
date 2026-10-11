@@ -2,6 +2,7 @@ node_modules/
 .env
 Data/processed/
 graph*.json
+!Backend/tests/fixtures/graphSnapshot.json
 dist/
 .DS_Store
 coverage/

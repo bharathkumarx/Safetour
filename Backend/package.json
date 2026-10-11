@@ -19,7 +19,8 @@
     "demo:candidates": "node scripts/demoCandidates.js",
     "backfill:fingerprints": "node scripts/backfillFingerprints.js",
     "build:risk": "node scripts/buildRiskTables.js",
-    "build:graph": "node scripts/buildGraph.js"
+    "build:graph": "node scripts/buildGraph.js",
+    "graph:measure": "node --expose-gc scripts/measureGraphMemory.js"
   },
   "keywords": [],
   "author": "",

@@ -7,6 +7,7 @@ import { env, validateOverpassUserAgent } from '../src/config/env.js';
 import { Metadata } from '../src/models/CellRisk.js';
 import { cachePathForTile, fetchOverpassTile, tileBboxes, overpassStatus, cachedTileStatus } from '../src/services/overpass.js';
 import { buildRoutingGraph, loadRoutingGraph } from '../src/routing/graph.js';
+import { encodeBGraph, encodeBRisk, topologyHash, makeGraphVersion, parseGraphVersion } from '../src/routing/graphBinary.js';
 
 const bounds = [12.80, 77.45, 13.18, 77.80];
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -62,6 +63,7 @@ function parseArgs(argv) {
     fromCache: argv.includes('--from-cache'),
     allowPartial: argv.includes('--allow-partial'),
     status: argv.includes('--status'),
+    convert: argv.includes('--convert'),
   };
 }
 
@@ -99,8 +101,10 @@ async function buildMode(mode, { selectedTiles, resume = false, fromCache = fals
   const edges = built.edges.filter((edge) => keep.has(edge.from) && keep.has(edge.to));
   const nodes = [...combined.nodes.values()].filter((node) => keep.has(node.id));
   const keptWays = combined.ways.filter((way) => way.nodes.some((id) => keep.has(id)));
+  const hash = topologyHash(nodes.length, edges.length, edges[0]?.id || '');
   return {
-    graphVersion: crypto.createHash('sha256').update(JSON.stringify({ nodes, edges })).digest('hex').slice(0, 16),
+    graphVersion: makeGraphVersion(hash, 0),
+    hash,
     nodes,
     ways: keptWays,
     edges,
@@ -123,16 +127,36 @@ export function computeEdgeRisks(edges, cellRisks = [], cityMeanRisk = 0.5) {
   }))]));
 }
 
-export async function writeRiskArtifacts(results, { outputDir = defaultOutputDir, cellRisks = [], cityMeanRisk = 0.5 } = {}) {
+function countFallbackEdges(edges, cellRisks = []) {
+  const lookup = new Set(cellRisks.map((risk) => `${risk.h3}:${risk.band}`));
+  return edges.filter((edge) => ['Morning', 'Afternoon', 'Evening', 'Night']
+    .some((band) => !(edge.cells || []).some((cell) => lookup.has(`${cell}:${band}`)))).length;
+}
+
+export async function writeRiskArtifacts(results, {
+  outputDir = defaultOutputDir, cellRisks = [], cityMeanRisk = 0.5, dataVersion = '',
+} = {}) {
   await fs.mkdir(outputDir, { recursive: true });
   for (const [mode, graph] of Object.entries(results)) {
-    const riskPath = path.join(outputDir, `blr_${mode}_edge_risk.bin`);
-    await fs.writeFile(`${riskPath}.next`, JSON.stringify({ graphVersion: graph.graphVersion, risks: computeEdgeRisks(graph.edges, cellRisks, cityMeanRisk) }));
-    await fs.rename(`${riskPath}.next`, riskPath);
+    const edgeIds = graph.edges.map((e) => e.id);
+    const risks = computeEdgeRisks(graph.edges, cellRisks, cityMeanRisk);
+    const fallbackEdges = countFallbackEdges(graph.edges, cellRisks);
+    const hash = graph.hash || topologyHash(graph.nodes.length, graph.edges.length, edgeIds[0] || '');
+    const { seq } = parseGraphVersion(graph.graphVersion);
+    // Write binary .brisk
+    const briskPath = path.join(outputDir, `blr_${mode}.brisk`);
+    const briskBuf = encodeBRisk({ edgeIds, risks, graphHash: hash, riskSeq: seq, dataVersion });
+    await fs.writeFile(`${briskPath}.next`, briskBuf);
+    await fs.rename(`${briskPath}.next`, briskPath);
+    console.log(`[build:graph] ${mode}: ${fallbackEdges} edges used city-mean risk fallback`);
   }
 }
 
-export async function buildGraphs({ modes = ['drive', 'walk'], outputDir = defaultOutputDir, cellRisks = [], cityMeanRisk = 0.5, selectedTiles = [...Array(16).keys()].map((n) => n + 1), resume = false, fromCache = false, allowPartial = false, onProgress = () => {} } = {}) {
+export async function buildGraphs({
+  modes = ['drive', 'walk'], outputDir = defaultOutputDir, cellRisks = [], cityMeanRisk = 0.5,
+  selectedTiles = [...Array(16).keys()].map((n) => n + 1), resume = false, fromCache = false,
+  allowPartial = false, onProgress = () => {}, writeRisks = true,
+} = {}) {
   if ((selectedTiles.length < 16 || selectedTiles.length === 0) && !allowPartial && !resume) {
     throw new Error('Refusing graph build: all 16 tiles are required (use --allow-partial to override)');
   }
@@ -146,16 +170,60 @@ export async function buildGraphs({ modes = ['drive', 'walk'], outputDir = defau
     }
     if (graph.failed.length) console.warn(`WARNING: partial graph; missing tiles: ${graph.failed.join(',')}`);
     await fs.mkdir(outputDir, { recursive: true });
-    const graphPath = path.join(outputDir, `blr_${mode}_graph.json`);
-    await fs.writeFile(`${graphPath}.next`, JSON.stringify(graph)); await fs.rename(`${graphPath}.next`, graphPath);
+    // Write binary .bgraph
+    const bgraphPath = path.join(outputDir, `blr_${mode}.bgraph`);
+    const bgraphBuf = encodeBGraph({ nodes: graph.nodes, edges: graph.edges, hash: graph.hash });
+    await fs.writeFile(`${bgraphPath}.next`, bgraphBuf);
+    await fs.rename(`${bgraphPath}.next`, bgraphPath);
     results[mode] = graph;
   }
-  await writeRiskArtifacts(results, { outputDir, cellRisks, cityMeanRisk });
+  if (writeRisks) await writeRiskArtifacts(results, { outputDir, cellRisks, cityMeanRisk });
   return results;
+}
+
+/**
+ * Convert existing JSON artifacts to binary format without any network request.
+ * Used by: npm run build:graph -- --convert
+ */
+export async function convertJsonToBinary(outputDir = defaultOutputDir) {
+  for (const mode of ['drive', 'walk']) {
+    const jsonPath = path.join(outputDir, `blr_${mode}_graph.json`);
+    const riskJsonPath = path.join(outputDir, `blr_${mode}_edge_risk.bin`);
+    let data, risksObj = {};
+    try { data = JSON.parse(await fs.readFile(jsonPath, 'utf8')); } catch { continue; }
+    try { risksObj = JSON.parse((await fs.readFile(riskJsonPath)).toString('utf8')).risks || {}; } catch { /* ok */ }
+    const nodes = data.nodes || [];
+    const edges = data.edges || [];
+    const hash = topologyHash(nodes.length, edges.length, edges[0]?.id || '');
+    const { seq } = parseGraphVersion(data.graphVersion || '');
+    const bgraphBuf = encodeBGraph({ nodes, edges, hash });
+    const edgeIds = edges.map((e) => e.id);
+    const briskBuf = encodeBRisk({ edgeIds, risks: risksObj, graphHash: hash, riskSeq: seq });
+    const bgraphPath = path.join(outputDir, `blr_${mode}.bgraph`);
+    const briskPath = path.join(outputDir, `blr_${mode}.brisk`);
+    await fs.writeFile(`${bgraphPath}.next`, bgraphBuf); await fs.rename(`${bgraphPath}.next`, bgraphPath);
+    await fs.writeFile(`${briskPath}.next`, briskBuf); await fs.rename(`${briskPath}.next`, briskPath);
+    const bgraphStat = await fs.stat(bgraphPath);
+    const briskStat = await fs.stat(briskPath);
+    console.log(`[convert] ${mode}: bgraph ${(bgraphStat.size / 1024 / 1024).toFixed(1)} MiB, brisk ${(briskStat.size / 1024 / 1024).toFixed(1)} MiB`);
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.convert) {
+    console.log('[build:graph] --convert: converting JSON artifacts to binary (no network)');
+    await convertJsonToBinary();
+    console.log('[build:graph] conversion complete');
+    process.exit(0);
+  }
+
+  if (args.fromCache) {
+    // Refuse any network request when --from-cache is set
+    process.env.OVERPASS_FROM_CACHE_ONLY = '1';
+  }
+
   try { validateOverpassUserAgent(); } catch (error) { console.error(error.message); process.exit(1); }
   if (args.status) {
     const statuses = await overpassStatus({ logger: (line) => console.log(line) });
@@ -176,7 +244,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   };
   let results;
   try {
-    results = await buildGraphs({ modes, selectedTiles, resume: args.resume, fromCache: args.fromCache, allowPartial: args.allowPartial, onProgress: progress });
+    results = await buildGraphs({
+      modes, selectedTiles, resume: args.resume, fromCache: args.fromCache,
+      allowPartial: args.allowPartial, onProgress: progress, writeRisks: false,
+    });
   } catch (error) {
     if (!error.failed) {
       console.error(error.stack || error);
@@ -194,7 +265,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { CellRisk } = await import('../src/models/CellRisk.js');
   const metadata = await Metadata.findOne({}).lean();
   const cellRisks = await CellRisk.find({}).select('h3 band risk').lean();
-  await writeRiskArtifacts(results, { cellRisks, cityMeanRisk: metadata?.cityMeanRisk ?? 0.5 });
+  await writeRiskArtifacts(results, {
+    cellRisks,
+    cityMeanRisk: metadata?.cityMeanRisk ?? 0.5,
+    dataVersion: metadata?.dataVersion || '',
+  });
   await Metadata.updateOne({}, { $set: { graphVersion: Object.values(results).map((r) => r.graphVersion).join(',') } });
   await mongoose.disconnect();
   const missing = [...new Set(Object.values(results).flatMap((r) => r.failed))];
@@ -202,8 +277,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const memory = process.memoryUsage();
   const graphStats = {};
   for (const mode of modes) {
-    const graphPath = path.join(defaultOutputDir, `blr_${mode}_graph.json`);
-    const riskPath = path.join(defaultOutputDir, `blr_${mode}_edge_risk.bin`);
+    const graphPath = path.join(defaultOutputDir, `blr_${mode}.bgraph`);
+    const riskPath = path.join(defaultOutputDir, `blr_${mode}.brisk`);
     const [graphFile, riskFile] = await Promise.all([fs.stat(graphPath), fs.stat(riskPath)]);
     const loadStarted = performance.now();
     await loadRoutingGraph({ mode, graphPath, riskPath });
