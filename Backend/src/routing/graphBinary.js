@@ -3,6 +3,9 @@
  * The topology is a single, aligned ArrayBuffer.  The fixed section table is
  * deliberately boring: readers can validate offsets and create zero-copy
  * typed-array views without walking records or allocating per-edge objects.
+ *
+ * Format version 2: edge IDs are numeric serials (0, 1, 2, ...) stored in
+ * the EDGE_ID section (BigUint64). No string table.
  */
 import crypto from 'node:crypto';
 
@@ -15,7 +18,7 @@ const ENTRY = 24;
 const TYPES = { INT32: 1, UINT32: 2, FLOAT32: 3, UINT8: 4, BIGUINT64: 5 };
 const S = {
   NODE_LAT: 1, NODE_LNG: 2, NODE_ID: 3, EDGE_FROM: 4, EDGE_TO: 5, EDGE_LENGTH: 6,
-  EDGE_HW: 7, EDGE_ID: 8, EDGE_ID_STR: 16, EDGE_ID_STR_OFF: 17, GEOM_OFF: 9, GEOM_POOL: 10, CELL_OFF: 11, CELL_POOL: 12,
+  EDGE_HW: 7, EDGE_ID: 8, GEOM_OFF: 9, GEOM_POOL: 10, CELL_OFF: 11, CELL_POOL: 12,
   CSR_CELL: 13, CSR_OFF: 14, CSR_EDGE: 15,
 };
 const align = (n) => (n + 7) & ~7;
@@ -35,37 +38,23 @@ export function parseGraphVersion(value = '') {
   return i < 0 ? { hash: value, seq: 0 } : { hash: value.slice(0, i), seq: Number(value.slice(i + 1)) || 0 };
 }
 
-function numericId(value, fallback) {
-  try {
-    const n = BigInt(String(value));
-    return n >= 0n ? n : BigInt(fallback);
-  } catch { return BigInt(fallback); }
-}
-
 /** Encode graph topology into one aligned binary buffer. */
 export function encodeBGraph({ nodes, edges, hash }) {
   const n = nodes.length; const e = edges.length;
   const nodeMap = new Map(nodes.map((x, i) => [String(x.id), i]));
   const nodeLat = new Int32Array(n); const nodeLng = new Int32Array(n); const nodeId = new BigUint64Array(n);
-  nodes.forEach((x, i) => { nodeLat[i] = Math.round(x.lat * 1e6); nodeLng[i] = Math.round(x.lng * 1e6); nodeId[i] = numericId(x.id, i); });
+  nodes.forEach((x, i) => { nodeLat[i] = Math.round(x.lat * 1e6); nodeLng[i] = Math.round(x.lng * 1e6); nodeId[i] = BigInt(i); });
   const from = new Uint32Array(e); const to = new Uint32Array(e); const length = new Float32Array(e);
   const hw = new Uint8Array(e); const edgeId = new BigUint64Array(e);
-  const edgeIdStrOff = new Uint32Array(e + 1);
-  const edgeIdStrPool = [];
   const geomOff = new Uint32Array(e + 1); const cellOff = new Uint32Array(e + 1);
   const geom = []; const cells = [];
   const hwClasses = ['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'residential', 'service', 'unclassified', 'living_street', 'footway', 'path', 'cycleway', 'steps'];
   for (let i = 0; i < e; i += 1) {
     const x = edges[i]; from[i] = nodeMap.get(String(x.from)) ?? 0xffffffff; to[i] = nodeMap.get(String(x.to)) ?? 0xffffffff;
-    length[i] = x.length || 0; hw[i] = Math.max(0, hwClasses.indexOf(x.tags?.highway) + 1); edgeId[i] = numericId(x.id, i);
-    edgeIdStrOff[i] = edgeIdStrPool.length;
-    const str = String(x.id);
-    const encoded = new TextEncoder().encode(str);
-    for (const b of encoded) edgeIdStrPool.push(b);
+    length[i] = x.length || 0; hw[i] = Math.max(0, hwClasses.indexOf(x.tags?.highway) + 1); edgeId[i] = BigInt(i);
     geomOff[i] = geom.length / 2; for (const p of x.geometry || []) geom.push(Math.round(p.lat * 1e6), Math.round(p.lng * 1e6));
     cellOff[i] = cells.length; for (const c of [...new Set(x.cells || [])].sort()) cells.push(asCell(c));
   }
-  edgeIdStrOff[e] = edgeIdStrPool.length;
   geomOff[e] = geom.length / 2; cellOff[e] = cells.length;
   const unique = [...new Set(cells.map(String))].map(BigInt).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
   const index = new Map(unique.map((x, i) => [String(x), i])); const deg = new Uint32Array(unique.length);
@@ -77,8 +66,6 @@ export function encodeBGraph({ nodes, edges, hash }) {
     [S.NODE_LAT, TYPES.INT32, nodeLat], [S.NODE_LNG, TYPES.INT32, nodeLng], [S.NODE_ID, TYPES.BIGUINT64, nodeId],
     [S.EDGE_FROM, TYPES.UINT32, from], [S.EDGE_TO, TYPES.UINT32, to], [S.EDGE_LENGTH, TYPES.FLOAT32, length],
     [S.EDGE_HW, TYPES.UINT8, hw], [S.EDGE_ID, TYPES.BIGUINT64, edgeId],
-    [S.EDGE_ID_STR, TYPES.UINT8, Uint8Array.from(edgeIdStrPool)],
-    [S.EDGE_ID_STR_OFF, TYPES.UINT32, edgeIdStrOff],
     [S.GEOM_OFF, TYPES.UINT32, geomOff],
     [S.GEOM_POOL, TYPES.INT32, Int32Array.from(geom)], [S.CELL_OFF, TYPES.UINT32, cellOff],
     [S.CELL_POOL, TYPES.BIGUINT64, BigUint64Array.from(cells)], [S.CSR_CELL, TYPES.BIGUINT64, BigUint64Array.from(unique)],
@@ -98,34 +85,23 @@ export function encodeBGraph({ nodes, edges, hash }) {
 export function decodeBGraph(input) {
   const buffer = input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength); const dv = new DataView(buffer);
   if (new TextDecoder().decode(new Uint8Array(buffer, 0, 5)) !== BGRAPH_MAGIC) throw new Error('Not a .bgraph file');
-  if (dv.getUint8(5) !== VERSION) throw new Error('Unsupported .bgraph version');
+  const fileVersion = dv.getUint8(5);
+  if (fileVersion !== VERSION) {
+    throw new Error(`Unsupported .bgraph version ${fileVersion}. Current version is ${VERSION}. Rebuild with: npm run build:graph -- --mode drive --from-cache && npm run build:edge-risk`);
+  }
   const count = dv.getUint16(8, true); const nodeCount = dv.getUint32(10, true); const edgeCount = dv.getUint32(14, true);
   const hash = new TextDecoder().decode(new Uint8Array(buffer, 18, 16)); const map = new Map();
   for (let i = 0; i < count; i++) { const p = PREFIX + i * ENTRY; map.set(dv.getUint16(p, true), { offset: Number(dv.getBigUint64(p + 4, true)), bytes: Number(dv.getBigUint64(p + 12, true)), count: dv.getUint32(p + 20, true) }); }
   const get = (id, type) => { const x = map.get(id); if (!x) throw new Error(`missing topology section ${id}`); return view(buffer, x.offset, x.count, type); };
   const nodeLat = get(S.NODE_LAT, Int32Array); const nodeLng = get(S.NODE_LNG, Int32Array); const nodeRaw = get(S.NODE_ID, BigUint64Array);
   const edgeFrom = get(S.EDGE_FROM, Uint32Array); const edgeTo = get(S.EDGE_TO, Uint32Array); const edgeLengthM = get(S.EDGE_LENGTH, Float32Array);
-  const edgeHwClass = get(S.EDGE_HW, Uint8Array); get(S.EDGE_ID, BigUint64Array); const edgeGeomOff = get(S.GEOM_OFF, Uint32Array);
+  const edgeHwClass = get(S.EDGE_HW, Uint8Array); const edgeIdsRaw = get(S.EDGE_ID, BigUint64Array); const edgeGeomOff = get(S.GEOM_OFF, Uint32Array);
   const edgeCellOff = get(S.CELL_OFF, Uint32Array); const geomRaw = get(S.GEOM_POOL, Int32Array); const cellPool = get(S.CELL_POOL, BigUint64Array);
   const csrSortedCells = get(S.CSR_CELL, BigUint64Array); const csrOffsets = get(S.CSR_OFF, Uint32Array); const csrEdgeIds = get(S.CSR_EDGE, Uint32Array);
   const nodeLats = new Float64Array(nodeCount); const nodeLngs = new Float64Array(nodeCount);
   for (let i = 0; i < nodeCount; i++) { nodeLats[i] = nodeLat[i] / 1e6; nodeLngs[i] = nodeLng[i] / 1e6; }
   const nodeIds = [...nodeRaw].map(String);
-  let edgeIds;
-  const edgeIdStrPool = map.has(S.EDGE_ID_STR) ? get(S.EDGE_ID_STR, Uint8Array) : null;
-  const edgeIdStrOff = map.has(S.EDGE_ID_STR_OFF) ? get(S.EDGE_ID_STR_OFF, Uint32Array) : null;
-  if (edgeIdStrPool && edgeIdStrOff && edgeIdStrOff.length === edgeCount + 1) {
-    const decoder = new TextDecoder();
-    edgeIds = new Array(edgeCount);
-    for (let i = 0; i < edgeCount; i++) {
-      const start = edgeIdStrOff[i];
-      const end = edgeIdStrOff[i + 1];
-      edgeIds[i] = decoder.decode(edgeIdStrPool.subarray(start, end));
-    }
-  } else {
-    const edgeIdsRaw = get(S.EDGE_ID, BigUint64Array);
-    edgeIds = [...edgeIdsRaw].map(String);
-  }
+  const edgeIds = [...edgeIdsRaw].map(String);
   const getEdgeGeometry = (i) => { const result = []; for (let j = edgeGeomOff[i]; j < edgeGeomOff[i + 1]; j++) result.push({ lat: geomRaw[j * 2] / 1e6, lng: geomRaw[j * 2 + 1] / 1e6 }); return result; };
   const getEdgeCells = (i) => [...cellPool.subarray(edgeCellOff[i], edgeCellOff[i + 1])].map((x) => x.toString(16).padStart(15, '0'));
   return { nodeCount, edgeCount, hash, nodeLats, nodeLngs, nodeIds, nodeSerials: new Uint32Array(nodeCount).map((_, i) => i), edgeFrom, edgeTo, edgeLengthM, edgeHwClass, edgeIds, edgeGeomOff, edgeGeomLen: edgeGeomOff.slice(0, -1).map((x, i) => edgeGeomOff[i + 1] - x), edgeCellOff, edgeCellLen: edgeCellOff.slice(0, -1).map((x, i) => edgeCellOff[i + 1] - x), cellPool, csrSortedCells, csrOffsets, csrEdgeIds, getEdgeGeometry, getEdgeCells };

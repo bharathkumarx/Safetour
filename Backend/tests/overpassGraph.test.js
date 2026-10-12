@@ -44,7 +44,8 @@ describe('Overpass and routing graph', () => {
       await fs.writeFile(riskPath, briskBuf);
       await loadRoutingGraph({ mode, graphPath, riskPath });
       expect(graphInfo(mode).edges).toBe(1);
-      expect(edgeRisk(built.edges[0].id, 'Morning', mode)).toBe(0.2);
+      // Edge IDs are now numeric serials (0, 1, 2...); with 1 edge, the serial is "0"
+      expect(edgeRisk('0', 'Morning', mode)).toBe(0.2);
     }
     expect(() => nearestNode(10, 70, 'drive')).toThrowError(/No road nearby/);
   });

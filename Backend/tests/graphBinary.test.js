@@ -27,7 +27,7 @@ function makeSyntheticGraph(nodeCount = 10) {
   const edges = [];
   for (let i = 0; i < nodeCount - 1; i++) {
     edges.push({
-      id: `e${i}`,
+      id: String(i),
       from: String(i), to: String(i + 1),
       length: 150,
       tags: { highway: 'residential' },
@@ -57,8 +57,8 @@ describe('graphBinary encode/decode round-trip', () => {
       expect(d.nodeLngs[i]).toBeCloseTo(nodes[i].lng, 5);
     }
 
-    // Binary edge IDs now preserve original string IDs from the input.
-    expect(d.edgeIds).toEqual(['e0', 'e1', 'e2', 'e3']);
+    // Binary edge IDs are numeric serials (edge index)
+    expect(d.edgeIds).toEqual(['0', '1', '2', '3']);
 
     // Geometry decoded lazily
     const geom = d.getEdgeGeometry(0);
@@ -85,6 +85,30 @@ describe('graphBinary encode/decode round-trip', () => {
     }
   });
 
+  it('header contains no string table sections (EDGE_ID_STR, EDGE_ID_STR_OFF)', () => {
+    const { nodes, edges } = makeSyntheticGraph(5);
+    const buf = encodeBGraph({ nodes, edges, hash: topologyHash(nodes.length, edges.length, edges[0].id) });
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const tableOffset = 40;
+    const sectionCount = view.getUint16(8, true);
+    const forbiddenSections = new Set([16, 17]); // EDGE_ID_STR, EDGE_ID_STR_OFF
+    for (let i = 0; i < sectionCount; i += 1) {
+      const entry = tableOffset + i * 24;
+      const sectionId = view.getUint16(entry, true);
+      expect(forbiddenSections.has(sectionId)).toBe(false);
+    }
+  });
+
+  it('getEdge(i).id === i for synthetic graph (numeric serial ids)', () => {
+    const { nodes, edges } = makeSyntheticGraph(10);
+    const hash = topologyHash(nodes.length, edges.length, edges[0].id);
+    const buf = encodeBGraph({ nodes, edges, hash });
+    const d = decodeBGraph(buf);
+    for (let i = 0; i < d.edgeCount; i++) {
+      expect(d.edgeIds[i]).toBe(String(i));
+    }
+  });
+
   it('getEdgeCells returns the same cells as the input (sorted)', () => {
     const nodes = [
       { id: 'a', lat: 12.9, lng: 77.6 },
@@ -92,10 +116,10 @@ describe('graphBinary encode/decode round-trip', () => {
     ];
     const cellsInput = ['8f28308280fffff', '8f283082807ffff'];
     const edges = [{
-      id: 'e0', from: 'a', to: 'b', length: 100,
+      id: '0', from: 'a', to: 'b', length: 100,
       tags: {}, geometry: nodes, cells: cellsInput,
     }];
-    const hash = topologyHash(2, 1, 'e0');
+    const hash = topologyHash(2, 1, '0');
     const buf = encodeBGraph({ nodes, edges, hash });
     const d = decodeBGraph(buf);
     const cells = d.getEdgeCells(0);
@@ -197,10 +221,10 @@ describe('large synthetic graph', () => {
     }));
     // Long chain: N-1 edges
     const edges = Array.from({ length: N - 1 }, (_, i) => ({
-      id: `e${i}`, from: String(i), to: String(i + 1),
+      id: String(i), from: String(i), to: String(i + 1),
       length: 10, tags: {}, geometry: [nodes[i], nodes[i + 1]], cells: [],
     }));
-    const hash = topologyHash(N, edges.length, 'e0');
+    const hash = topologyHash(N, edges.length, '0');
     // This must not throw (no argument spreading, no recursion)
     const buf = encodeBGraph({ nodes, edges, hash });
     expect(buf.length).toBeGreaterThan(N * NODE_STRIDE);
@@ -220,7 +244,7 @@ describe('edgesForCells after reload', () => {
       { id: 'b', lat: 12.901, lng: 77.6 },
     ];
     const edges = [{
-      id: 'w:a:b', from: 'a', to: 'b', length: 110,
+      id: '0', from: 'a', to: 'b', length: 110,
       tags: { highway: 'residential' }, geometry: nodes,
       cells: ['8f28308280fffff'], cellWeights: { '8f28308280fffff': 110 },
     }];
@@ -247,7 +271,7 @@ describe('edgesForCells after reload', () => {
 // ── Snapshot comparison ───────────────────────────────────────────────────────
 describe('snapshot comparison (nearestNode, edgesForCells)', () => {
   let snapshot;
-  const snapshotPath = 'tests/fixtures/graphSnapshot.json';
+  const snapshotPath = 'tests/fixtures/graphSnapshot.original.json';
   const graphPath = '../Data/processed/blr_drive.bgraph';
   const riskPath = '../Data/processed/blr_drive.brisk';
 
@@ -266,20 +290,29 @@ describe('snapshot comparison (nearestNode, edgesForCells)', () => {
     }
   }, 60_000); // allow 60s for large graph load
 
-  it('nearestNode results are identical to pre-rewrite snapshot', () => {
+  it('nearestNode results match original golden lat/lng/distance (id-independent)', () => {
     if (!snapshot) { console.warn('No snapshot/graph; skipping nearestNode comparison'); return; }
     for (const r of snapshot.nearestResults) {
       if (r.error) continue; // skip NO_ROAD_NEARBY cases
       const result = nearestNode(r.queryLat, r.queryLng, 'drive');
-      expect(result.node.id).toBe(r.nodeId);
+      // Lat/lng tolerance: 1e-5 degrees (~1m) to account for floating point differences
+      expect(result.node.lat).toBeCloseTo(r.nodeLat, 5);
+      expect(result.node.lng).toBeCloseTo(r.nodeLng, 5);
+      // Distance tolerance: 0.5m
+      expect(result.distanceMeters).toBeCloseTo(r.distanceMeters, 0);
     }
   });
 
-  it('edgesForCells results are identical to pre-rewrite snapshot', () => {
+  it('edgesForCells returns same COUNT of edges per cell as original golden', () => {
     if (!snapshot) return;
     for (const r of snapshot.edgesForCellsResults) {
-      const ids = edgesForCells([r.cell], 'drive').map((e) => e.id).sort();
-      expect(ids).toEqual(r.edgeIds);
+      const edges = edgesForCells([r.cell], 'drive');
+      const expectedCount = r.edgeIds.length;
+      const actualCount = edges.length;
+      if (actualCount !== expectedCount) {
+        console.error(`MISMATCH cell=${r.cell}: expected ${expectedCount} edges, got ${actualCount}`);
+      }
+      expect(actualCount).toBe(expectedCount);
     }
   });
 
